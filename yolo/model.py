@@ -131,3 +131,67 @@ def testSimpleYolo(input_shape=(320, 320, 3), n_anchor_boxes=9, n_out=12):
   x = tf.random.normal([16, 320, 320, 3])
   y_hat = model(x, training=False)
   print(y_hat.shape)
+
+class SimpleYolo2(tf.keras.Model):
+  def __init__(self, input_shape, n_out, n_class) -> None:
+    super().__init__()
+    self.n_class = n_class
+    self.model = tf.keras.Sequential([
+      tf.keras.layers.Conv2D(64, (7, 7), padding="same", input_shape=input_shape),
+      tf.keras.layers.LeakyReLU(alpha=0.1),
+      tf.keras.layers.MaxPool2D(2, 2),
+
+      tf.keras.layers.Conv2D(192, (3,3), padding="same"),
+      tf.keras.layers.LeakyReLU(alpha=0.1),
+      tf.keras.layers.MaxPool2D(2, 2),
+
+      tf.keras.layers.Conv2D(128, (1,1), padding="same"),
+      tf.keras.layers.LeakyReLU(alpha=0.1),
+      tf.keras.layers.Conv2D(256, (3,3), padding="same"),
+      tf.keras.layers.LeakyReLU(alpha=0.1),
+      tf.keras.layers.Conv2D(256, (1,1), padding="same"),
+      tf.keras.layers.LeakyReLU(alpha=0.1),
+      tf.keras.layers.Conv2D(512, (3,3), padding="same"),
+      tf.keras.layers.LeakyReLU(alpha=0.1),
+      tf.keras.layers.MaxPool2D(2, 2),
+
+      tf.keras.layers.Conv2D(256, (1,1), padding="same"),
+      tf.keras.layers.LeakyReLU(alpha=0.1),
+      tf.keras.layers.Conv2D(512, (3,3), padding="same"),
+      tf.keras.layers.LeakyReLU(alpha=0.1),
+      tf.keras.layers.Conv2D(512, (1,1), padding="same"),
+      tf.keras.layers.LeakyReLU(alpha=0.1),
+      tf.keras.layers.Conv2D(1024, (3,3), padding="same"),
+      tf.keras.layers.MaxPool2D(2, 2),
+
+      tf.keras.layers.Conv2D(512, (1,1), padding="same"),
+      tf.keras.layers.LeakyReLU(alpha=0.1),
+      tf.keras.layers.Conv2D(1024, (3,3), padding="same"),
+      tf.keras.layers.LeakyReLU(alpha=0.1),
+      tf.keras.layers.Conv2D(512, (1,1), padding="same"),
+      tf.keras.layers.LeakyReLU(alpha=0.1),
+      tf.keras.layers.Conv2D(1024, (3,3), padding="same"),
+      tf.keras.layers.LeakyReLU(alpha=0.1),
+      tf.keras.layers.MaxPool2D(2, 2),
+      
+      tf.keras.layers.Conv2D(512, (1,1), padding="same"),
+      tf.keras.layers.LeakyReLU(alpha=0.1),
+      tf.keras.layers.Conv2D(1024, (3,3), padding="same"),
+      tf.keras.layers.LeakyReLU(alpha=0.1),
+      tf.keras.layers.Conv2D(512, (1,1), padding="same"),
+      tf.keras.layers.LeakyReLU(alpha=0.1),
+      tf.keras.layers.Conv2D(1024, (3,3), padding="same"),
+      tf.keras.layers.LeakyReLU(alpha=0.1),
+      tf.keras.layers.Conv2D(1024, (3,3), strides=(2,2), padding="valid"),
+
+      tf.keras.layers.Flatten(),
+      tf.keras.layers.Dense(1024),
+      tf.keras.layers.LeakyReLU(alpha=0.1),
+      tf.keras.layers.Dense(20 * 20 * n_out),
+      tf.keras.layers.Reshape((20, 20, n_out))
+    ])
+    self.model.summary()
+
+  def call(self, x):
+    out = self.model(x)
+    return out

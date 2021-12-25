@@ -21,7 +21,7 @@ import cv2
 
 from yolo.const import *
 from yolo.utils import draw_boxes, iou, show_img, preprocess_image
-from yolo.model import SimpleModel, SimpleModel2, SimpleYolo, testSimpleYolo
+from yolo.model import SimpleModel, SimpleModel2, SimpleYolo, SimpleYolo2, testSimpleYolo
 from yolo.loss import yolo_loss, simple_mse_loss
 
 dataset_root = "./dataset/coco"
@@ -31,8 +31,8 @@ train_image_folder = os.path.join(dataset_root, "train")
 test_image_folder = os.path.join(dataset_root, "val")
 
 data_pile_path = "./dataset/coco/pickle/dump.npy"
-training_history_path = "./training_history/history.npy"
-model_weights_path = "./weights/checkpoint"
+training_history_path = "./training_history/history2.npy"
+model_weights_path = "./weights/checkpoint2"
 
 # Data format
 # https://cocodataset.org/#format-data
@@ -284,15 +284,19 @@ test_batch_iter = iter(test_batch_dataset)
 
 optimizer = tf.keras.optimizers.SGD(learning_rate=learning_rate)
 
-model = SimpleYolo(
+model = SimpleYolo2(
   input_shape=(*image_size, n_channels),
   n_out=n_class + 5,
   n_class=n_class
 )
-if os.path.exists(model_weights_path):
+
+if os.path.exists(model_weights_path + ".index"):
+  print("Model weights loaded!")
   model.load_weights(model_weights_path)
 
 # %%
+
+## Training
 
 def train_step(batch_x, batch_label, test_batch_iter, model, loss_function, optimizer, step=-1):
   with tf.device("/GPU:0"):
@@ -303,10 +307,22 @@ def train_step(batch_x, batch_label, test_batch_iter, model, loss_function, opti
     optimizer.apply_gradients(zip(grads, model.trainable_weights))
   return loss
 
-def train(model, training_batch_iter, test_batch_iter, optimizer, loss_function, history, epochs=1, steps_per_epoch=20, valid_step=5):
+def train(model, 
+        training_batch_iter, 
+        test_batch_iter, 
+        optimizer, 
+        loss_function, 
+        history, 
+        epochs=1, 
+        steps_per_epoch=20, 
+        valid_step=5,
+        history_path=None,
+        weights_path=None):
   
   epochs_loss, epochs_val_loss = history
-  
+  epochs_loss = epochs_loss.tolist()
+  epochs_val_loss = epochs_val_loss.tolist()
+
   for epoch in range(epochs):
     losses = []
 
@@ -339,6 +355,13 @@ def train(model, training_batch_iter, test_batch_iter, optimizer, loss_function,
 
         step_pointer += 1
     epochs_loss.append(losses)
+
+    # Save history and model
+    if history_path != None:
+      np.save(history_path, [epochs_loss, epochs_val_loss])
+    
+    if weights_path != None:
+      model.save_weights(weights_path)
   
   # return history
   return [epochs_loss, epochs_val_loss]
@@ -347,8 +370,8 @@ def train(model, training_batch_iter, test_batch_iter, optimizer, loss_function,
 # %%
 
 if not os.path.exists(training_history_path):
-  epochs_val_loss = []
-  epochs_loss = []
+  epochs_val_loss = np.array([])
+  epochs_loss = np.array([])
   history = [epochs_loss, epochs_val_loss]
 else:
   with open(training_history_path, "rb") as f:
@@ -363,16 +386,15 @@ history = train(
   yolo_loss,
   history,
   epochs=10,
-  steps_per_epoch=100 # 82783 // 16
+  steps_per_epoch=500, # 82783 // 16
+  history_path=training_history_path,
+  weights_path=model_weights_path
 )
-
-np.save(training_history_path, history)
-model.save_weights(model_weights_path)
 
 # TODO: History integration. DONE!
 # TODO: mAP metrics
 # TODO: Tensorboard integration
-# TODO: TQDM integration
+# TODO: TQDM integration. Also, time per training step/epoch
 # TODO: checkpoint (save weights) integration. Including handling keyboard exception.
 # TODO: lr scheduler integration
 
@@ -394,9 +416,7 @@ show_img(sample_img)
 print(sample_label.shape)
 assert sample_label.shape == sample_pred.shape
 
-# %%
-
-confidence_threshold = 0.3
+confidence_threshold = 0.2
 
 for yth_cell in range(sample_pred.shape[0]):
   for xth_cell in range(sample_pred.shape[1]):
@@ -426,6 +446,7 @@ for yth_cell in range(sample_pred.shape[0]):
       boxed_img = draw_boxes(sample_img, [[resized_xmin, resized_ymin, bbox_width, bbox_height]])
       show_img(boxed_img)
 
+# %%
 
 
 # %%5
@@ -438,6 +459,14 @@ b*a
 # %%5
 
 classes
+
+# %%
+
+
+[epochs_loss, epochs_val_loss] = history
+len(epochs_loss[0])
+epochs_loss[0][0]
+
 
 # %%
 
@@ -460,3 +489,15 @@ plt.show()
 # %%%5
 
 epochs_val_loss
+
+# %%
+
+a = np.empty((1,1))
+np.append(a, [[2]], axis=0)
+
+a = a.tolist()
+a
+
+# %%
+
+np.array([])

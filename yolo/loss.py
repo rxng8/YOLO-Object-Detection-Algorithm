@@ -40,15 +40,15 @@ def yolo_loss(true, pred):
   
   # Coordinates x, y loss
   # loss_xy shape (batch, 20, 20)
-  loss_xy = LAMBDA_COORD * tf.reduce_sum(tf.square(true[..., -5:-3] - pred[..., -5:-3]), axis=-1) * identity_obj
+  loss_xy = LAMBDA_COORD * tf.reduce_sum(tf.square(true[..., -5:-3]*tf.expand_dims(identity_obj,-1) - pred[..., -5:-3]*tf.expand_dims(identity_obj,-1)), axis=-1)
   # loss_wh shape (batch, 20, 20)
-  loss_wh = LAMBDA_COORD * tf.reduce_sum(tf.square(tf.sqrt(true[..., -3:-1] + 1e-6) - tf.sqrt(pred[..., -3:-1] + 1e-6)), axis=-1) * identity_obj
+  loss_wh = LAMBDA_COORD * tf.reduce_sum(tf.square(tf.sign(tf.sqrt(tf.abs(true[..., -3:-1]) + 1e-6))*tf.expand_dims(identity_obj,-1) - tf.sign(tf.sqrt(tf.abs(pred[..., -3:-1]) + 1e-6))*tf.expand_dims(identity_obj,-1)), axis=-1) 
   # loss_class shape (batch, 20, 20)
   loss_class = tf.reduce_sum(tf.square(true[..., :-5] - pred[..., :-5]) * tf.expand_dims(identity_obj, -1), axis=-1) 
   
   # loss_conf shape (batch, 20, 20)
-  loss_conf = tf.square(true[..., -1] - pred[..., -1]) * identity_obj \
-    + LAMBDA_NOOBJ * tf.square(true[..., -1] - pred[..., -1]) * (1 - identity_obj)
+  loss_conf = tf.square(true[..., -1] * identity_obj - pred[..., -1] * identity_obj) \
+    + LAMBDA_NOOBJ * tf.square(true[..., -1] * (1 - identity_obj) - pred[..., -1] * (1 - identity_obj))
 
   # iou shape: (batch_size, n_cell_y, n_cell_x)
   # ious = dynamic_iou(true[..., -5:-1], pred[..., -5:-1])
