@@ -5,7 +5,7 @@ BATCH_SIZE = 16
 
 image_size = (320, 320)
 n_channels = 3
-learning_rate = 1e-5
+learning_rate = 1e-3
 LAMBDA_COORD = 5.0
 LAMBDA_NOOBJ = 0.5
 

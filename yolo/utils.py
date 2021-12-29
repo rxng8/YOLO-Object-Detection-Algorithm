@@ -15,7 +15,7 @@ def iou(A, B):
   intersection = (min(xmax1, xmax2) - max(xmin1, xmin2)) * (min(ymax1, ymax2) - max(ymin1, ymin2))
   intersection = max(0, intersection)
   union = (xmax1 - xmin1) * (ymax1 - ymin1) + (xmax2 - xmin2) * (ymax2 - ymin2) - intersection
-  return float(intersection) / (union + 1e-05)
+  return float(intersection + 1e-9) / (union + 1e-9)
 
 def dynamic_iou(A, B):
   """
@@ -46,12 +46,12 @@ def dynamic_iou(A, B):
   max_y1 = tf.reduce_max(tf.concat([y1_A, y1_B], axis=-1), axis=-1)
 
   # shape (batch_size, n_cell_y, n_cell_x)
-  intersection = (min_x2 - max_x1) * (min_y2 - max_y1)
+  intersection = tf.math.maximum(0, min_x2 - max_x1) * tf.math.maximum(0, min_y2 - max_y1)
 
   # (batch_size, n_cell_y, n_cell_x)
-  union = tf.squeeze((x2_A - x1_A) * (y2_A - y1_A) + (x2_B - x1_B) * (y2_B - y1_B), axis=-1) - intersection + 1e-9
+  union = tf.squeeze((x2_A - x1_A) * (y2_A - y1_A) + (x2_B - x1_B) * (y2_B - y1_B), axis=-1) - intersection
 
-  return intersection / union
+  return (intersection + 1e-9) / (union + 1e-9)
 
 def test_dynamic_iou():
   pass

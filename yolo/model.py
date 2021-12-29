@@ -120,11 +120,13 @@ class SimpleYolo(tf.keras.Model):
 
   def call(self, x):
     out = self.model(x)
-    out_classes = tf.keras.layers.Softmax()(out[..., :self.n_class])
-    out_coords = tf.keras.layers.ReLU()(out[..., self.n_class: self.n_class+4])
-    out_probs = tf.sigmoid(out[..., self.n_class+4:])
+    out_classes = tf.nn.sigmoid(out[..., :self.n_class])
+    # out_coords = tf.keras.layers.ReLU()(out[..., self.n_class: self.n_class+4])
+    out_coords = out[..., self.n_class: self.n_class+4]
+    out_probs = tf.nn.sigmoid(out[..., self.n_class+4:])
     ret_val = tf.concat([out_classes, out_coords, out_probs], axis=-1)
     return ret_val
+    # return out
 
 def testSimpleYolo(input_shape=(320, 320, 3), n_anchor_boxes=9, n_out=12):
   model = SimpleYolo(input_shape, n_anchor_boxes, n_out, 7)

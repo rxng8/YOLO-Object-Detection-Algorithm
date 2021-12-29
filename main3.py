@@ -7,7 +7,6 @@ from typing import List, Dict, Tuple
 import json
 import csv
 import pickle
-from typing import List, Dict, Tuple
 
 import tensorflow as tf
 print(f"Tensorflow version: {tf.__version__}")
@@ -20,7 +19,7 @@ import matplotlib.pyplot as plt
 import cv2
 
 from yolo.const import *
-from yolo.utils import draw_boxes, iou, show_img, preprocess_image
+from yolo.utils import draw_boxes, dynamic_iou, iou, show_img, preprocess_image
 from yolo.model import SimpleModel, SimpleModel2, SimpleYolo, SimpleYolo2, testSimpleYolo
 from yolo.loss import yolo_loss, simple_mse_loss
 
@@ -31,8 +30,8 @@ train_image_folder = os.path.join(dataset_root, "train")
 test_image_folder = os.path.join(dataset_root, "val")
 
 data_pile_path = "./dataset/coco/pickle/dump.npy"
-training_history_path = "./training_history/history2.npy"
-model_weights_path = "./weights/checkpoint2"
+training_history_path = "./training_history/history4.npy"
+model_weights_path = "./weights/checkpoint4"
 
 # Data format
 # https://cocodataset.org/#format-data
@@ -169,10 +168,11 @@ def train_gen():
         box_height = float(original_box_height) / original_height
         center_x = x + box_width / 2.0
         center_y = y + box_height / 2.0
+        # print(f"x: {x}, y: {y}, box_width: {box_width}, box_height: {box_height}, center_x: {center_x}, center_y: {center_y}")
 
         # compute the coordinates center with regard to the current cell
-        xth_cell = int(x * n_cell_x)
-        yth_cell = int(y * n_cell_y)
+        xth_cell = int(center_x * n_cell_x)
+        yth_cell = int(center_y * n_cell_y)
         cell_center_x = center_x * n_cell_x - xth_cell
         cell_center_y = center_y * n_cell_y - yth_cell
         cell_box_width = box_width * n_cell_x
@@ -229,8 +229,8 @@ def test_gen():
         center_x = x + box_width / 2.0
         center_y = y + box_height / 2.0
         # compute the coordinates center with regard to the current cell
-        xth_cell = int(x * n_cell_x)
-        yth_cell = int(y * n_cell_y)
+        xth_cell = int(center_x * n_cell_x)
+        yth_cell = int(center_y * n_cell_y)
         cell_center_x = center_x * n_cell_x - xth_cell
         cell_center_y = center_y * n_cell_y - yth_cell
         cell_box_width = box_width * n_cell_x
@@ -385,8 +385,8 @@ history = train(
   optimizer,
   yolo_loss,
   history,
-  epochs=10,
-  steps_per_epoch=500, # 82783 // 16
+  epochs=2,
+  steps_per_epoch=5000, # 82783 // 16
   history_path=training_history_path,
   weights_path=model_weights_path
 )
@@ -416,7 +416,7 @@ show_img(sample_img)
 print(sample_label.shape)
 assert sample_label.shape == sample_pred.shape
 
-confidence_threshold = 0.2
+confidence_threshold = 0.01
 
 for yth_cell in range(sample_pred.shape[0]):
   for xth_cell in range(sample_pred.shape[1]):
@@ -501,3 +501,144 @@ a
 # %%
 
 np.array([])
+
+# %%
+
+sample_data = next(train_batch_iter)
+# %%
+
+sample_img = sample_data["input"]
+sample_label = sample_data["output"]
+sample_id = 1
+
+# %%
+show_img(sample_img[sample_id])
+# %%
+
+cell_list = []
+
+confidence_score = 0.5 
+for yth_cell in range(sample_label[sample_id].shape[0]):
+  for xth_cell in range(sample_label[sample_id].shape[1]):
+    # Draw all boxes with confidence > 0.5
+    cell_center_x = sample_label[sample_id][yth_cell, xth_cell, n_class + 0] # range [0, 1]
+    cell_center_y = sample_label[sample_id][yth_cell, xth_cell, n_class + 1] # range [0, 1]
+    cell_bbox_width = sample_label[sample_id][yth_cell, xth_cell, n_class + 2] # range [0, 1]
+    cell_bbox_height = sample_label[sample_id][yth_cell, xth_cell, n_class + 3] # range [0, 1]
+    
+    # Draw out!
+    center_x = (cell_center_x + xth_cell) / n_cell_x
+    center_y = (cell_center_y + yth_cell) / n_cell_y
+    bbox_width = cell_bbox_width / n_cell_x
+    bbox_height = cell_bbox_height / n_cell_y
+    
+    resized_xmin = center_x - bbox_width / 2.0
+    resized_xmax = center_x + bbox_width / 2.0
+    resized_ymin = center_y - bbox_height / 2.0
+    resized_ymax = center_y + bbox_height / 2.0
+    confidence = sample_label[sample_id][yth_cell, xth_cell, n_class + 4]
+    pred_classes = sample_label[sample_id][yth_cell, xth_cell, 0:n_class]
+    max_class_id = int(tf.argmax(pred_classes).numpy())
+    if confidence > confidence_score:
+      cell_list.append((yth_cell, xth_cell))
+      print(f"Labeled class: {id_to_class[max_class_id]}")
+      print(f"Confidence score: {confidence}")
+      # Show the img with bounding boxes for the resized img
+      boxed_img = draw_boxes(sample_img[sample_id], [[resized_xmin, resized_ymin, bbox_width, bbox_height]])
+      show_img(boxed_img)
+
+# %%
+
+cell_list
+
+# %%
+
+sample_pred = model(sample_img)
+# %%
+
+sample_pred_item = sample_pred[sample_id]
+
+# %%
+
+sample_label_item = sample_label[sample_id]
+
+# %%
+
+loss = yolo_loss(sample_label, sample_pred)
+
+# %%
+
+# %%
+
+
+identity_obj = sample_label[..., -1].numpy() # (batch, 20, 20)
+# Shape (batch, 20, 20, n_classes + 5)
+
+
+# %%
+
+a = tf.square(label_conf * identity_obj)
+
+# %%
+
+sample_a = a[sample_id]
+
+# %%
+A = sample_label[..., -5:-1]
+B = sample_label[..., -5:-1]
+
+x1_A = A[..., 0:1] - (A[..., 2:3] / 2.0)
+y1_A = A[..., 1:2] - (A[..., 3:4] / 2.0)
+x2_A = A[..., 0:1] + (A[..., 2:3] / 2.0)
+y2_A = A[..., 1:2] + (A[..., 3:4] / 2.0)
+
+x1_B = B[..., 0:1] - (B[..., 2:3] / 2.0)
+y1_B = B[..., 1:2] - (B[..., 3:4] / 2.0)
+x2_B = B[..., 0:1] + (B[..., 2:3] / 2.0)
+y2_B = B[..., 1:2] + (B[..., 3:4] / 2.0)
+
+# shape (batch_size, n_cell_y, n_cell_x)
+min_x2 = tf.reduce_min(tf.concat([x2_A, x2_B], axis=-1), axis=-1)
+max_x1 = tf.reduce_max(tf.concat([x1_A, x1_B], axis=-1), axis=-1)
+min_y2 = tf.reduce_min(tf.concat([y2_A, y2_B], axis=-1), axis=-1)
+max_y1 = tf.reduce_max(tf.concat([y1_A, y1_B], axis=-1), axis=-1)
+
+# shape (batch_size, n_cell_y, n_cell_x)
+intersection = tf.math.maximum(0, min_x2 - max_x1) * tf.math.maximum(0, min_y2 - max_y1)
+
+# (batch_size, n_cell_y, n_cell_x)
+union = tf.squeeze((x2_A - x1_A) * (y2_A - y1_A) + (x2_B - x1_B) * (y2_B - y1_B), axis=-1) - intersection
+
+lala = (intersection + 1e-9) / (union + 1e-9)
+
+# %%
+
+ious = dynamic_iou(sample_label[..., -5:-1], sample_label[..., -5:-1]) # Shape (batch, 20,20)
+# ious = ious[..., tf.newaxis] # (batch, 20, 20, 1)
+label_conf = sample_label[..., -1] * lala
+
+
+
+# %%
+
+ious = dynamic_iou(sample_label[..., -5:-1], sample_pred[..., -5:-1]) # Shape (batch, 20,20)
+# ious = ious[..., tf.newaxis] # (batch, 20, 20, 1)
+label_conf = sample_label[..., -1] * ious
+
+# Coordinates x, y loss
+# loss_xy shape (batch, 20, 20)
+loss_xy = LAMBDA_COORD * tf.reduce_sum(tf.square(sample_label[..., -5:-3]*tf.expand_dims(identity_obj,-1) - sample_pred[..., -5:-3]*tf.expand_dims(identity_obj,-1)), axis=-1)
+# loss_wh shape (batch, 20, 20)
+loss_wh = LAMBDA_COORD * tf.reduce_sum(tf.square(tf.sign(sample_label[..., -3:-1])*tf.sqrt(tf.abs(sample_label[..., -3:-1]) + 1e-6)*tf.expand_dims(identity_obj,-1) - tf.sign(sample_pred[..., -3:-1])*tf.sqrt(tf.abs(sample_pred[..., -3:-1]) + 1e-6)*tf.expand_dims(identity_obj,-1)), axis=-1) 
+# loss_class shape (batch, 20, 20)
+loss_class = tf.reduce_sum(tf.square(sample_label[..., :-5] - sample_pred[..., :-5]) * tf.expand_dims(identity_obj, -1), axis=-1)
+
+# loss_conf shape (batch, 20, 20)
+loss_conf = tf.square(label_conf * identity_obj - sample_pred[..., -1] * identity_obj) \
+  + LAMBDA_NOOBJ * tf.square(label_conf * (1 - identity_obj) - sample_pred[..., -1] * (1 - identity_obj))
+
+# element wise addition
+loss = (loss_xy + loss_wh + loss_class + loss_conf)
+
+
+
