@@ -92,7 +92,10 @@ def draw_boxes(img, boxes: List[List[float]]):
       box (List[List[float]]): Expect list of boxes, each box is [x, y, width, heigh]. (x, y) is the top-left point
   """
   img_height, img_width = img.shape[0:2]
-  boxed_img = img.numpy()
+  try:
+    boxed_img = img.numpy()
+  except:
+    pass
   for box in boxes:
     x, y, width, height = box
     xmin = int(x * img_width)

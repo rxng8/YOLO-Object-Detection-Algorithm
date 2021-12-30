@@ -391,6 +391,13 @@ history = train(
   weights_path=model_weights_path
 )
 
+# %%
+# MAnually save things!
+# model.save_weights(model_weights_path)
+# np.save(training_history_path, history)
+
+# %%
+
 # TODO: History integration. DONE!
 # TODO: mAP metrics
 # TODO: Tensorboard integration
@@ -416,8 +423,8 @@ show_img(sample_img)
 print(sample_label.shape)
 assert sample_label.shape == sample_pred.shape
 
-confidence_threshold = 0.01
-
+confidence_threshold = 0.0005
+boxed_img = tf.convert_to_tensor(sample_img)
 for yth_cell in range(sample_pred.shape[0]):
   for xth_cell in range(sample_pred.shape[1]):
     # Draw all boxes with confidence > 0.5
@@ -439,9 +446,12 @@ for yth_cell in range(sample_pred.shape[0]):
     confidence = sample_pred[yth_cell, xth_cell, n_class + 4]
     pred_classes = sample_pred[yth_cell, xth_cell, 0:n_class]
     max_class_id = int(tf.argmax(pred_classes).numpy())
-    print(f"Predicted class: {id_to_class[max_class_id]}")
-    print(f"Confidence score: {confidence}")
+    # print(f"Predicted class: {id_to_class[max_class_id]}")
+    # print(f"Confidence score: {confidence}")
     if confidence > confidence_threshold:
+      print(f"Predicted class: {id_to_class[max_class_id]}")
+      print(f"Confidence score: {confidence}")
+      
       # Show the img with bounding boxes for the resized img
       boxed_img = draw_boxes(sample_img, [[resized_xmin, resized_ymin, bbox_width, bbox_height]])
       show_img(boxed_img)
@@ -517,7 +527,7 @@ show_img(sample_img[sample_id])
 
 cell_list = []
 
-confidence_score = 0.5 
+confidence_score = 0.5
 for yth_cell in range(sample_label[sample_id].shape[0]):
   for xth_cell in range(sample_label[sample_id].shape[1]):
     # Draw all boxes with confidence > 0.5
