@@ -28,30 +28,34 @@ def dynamic_iou(A, B):
   Return:
     (Tensor): with shape (batch_size, n_cell_y, n_cell_x)
   """
-  # (batch_size, n_cell_y, n_cell_x, 1)
-  x1_A = A[..., 0:1] - (A[..., 2:3] / 2.0)
-  y1_A = A[..., 1:2] - (A[..., 3:4] / 2.0)
-  x2_A = A[..., 0:1] + (A[..., 2:3] / 2.0)
-  y2_A = A[..., 1:2] + (A[..., 3:4] / 2.0)
+  # (batch_size, n_cell_y, n_cell_x, 2)
+  A_wh = A[..., 2:4]
+  A_wh_half = A_wh / 2.
+  A_box_xy = A[..., 0:2]
+  A_mins = A_box_xy - A_wh_half
+  A_maxs = A_box_xy + A_wh_half
 
-  x1_B = B[..., 0:1] - (B[..., 2:3] / 2.0)
-  y1_B = B[..., 1:2] - (B[..., 3:4] / 2.0)
-  x2_B = B[..., 0:1] + (B[..., 2:3] / 2.0)
-  y2_B = B[..., 1:2] + (B[..., 3:4] / 2.0)
+  B_wh = B[..., 2:4]
+  B_wh_half = B_wh / 2.
+  B_box_xy = B[..., 0:2]
+  B_mins = B_box_xy - B_wh_half
+  B_maxs = B_box_xy + B_wh_half
 
-  # shape (batch_size, n_cell_y, n_cell_x)
-  min_x2 = tf.reduce_min(tf.concat([x2_A, x2_B], axis=-1), axis=-1)
-  max_x1 = tf.reduce_max(tf.concat([x1_A, x1_B], axis=-1), axis=-1)
-  min_y2 = tf.reduce_min(tf.concat([y2_A, y2_B], axis=-1), axis=-1)
-  max_y1 = tf.reduce_max(tf.concat([y1_A, y1_B], axis=-1), axis=-1)
+  intersect_mins = tf.maximum(A_mins, B_mins) # (batch_size, n_cell_y, n_cell_x, 2)
+  intersect_maxs = tf.minimum(A_maxs, B_maxs) # (batch_size, n_cell_y, n_cell_x, 2)
+  intersect_wh = tf.maximum(intersect_maxs - intersect_mins, 0) # (batch_size, n_cell_y, n_cell_x, 2)
+  intersect_areas = intersect_wh[..., 0] * intersect_wh[..., 1] # (batch_size, n_cell_y, n_cell_x)
 
-  # shape (batch_size, n_cell_y, n_cell_x)
-  intersection = tf.math.maximum(0, min_x2 - max_x1) * tf.math.maximum(0, min_y2 - max_y1)
+  A_areas = A_wh[..., 0] * A_wh[..., 1] # (batch_size, n_cell_y, n_cell_x)
+  B_areas = B_wh[..., 0] * B_wh[..., 1] # (batch_size, n_cell_y, n_cell_x)
 
-  # (batch_size, n_cell_y, n_cell_x)
-  union = tf.squeeze((x2_A - x1_A) * (y2_A - y1_A) + (x2_B - x1_B) * (y2_B - y1_B), axis=-1) - intersection
+  union_areas = A_areas + B_areas - intersect_areas
 
-  return (intersection + 1e-9) / (union + 1e-9)
+  ious = tf.truediv(intersect_areas + EPSILON, union_areas + EPSILON)
+
+  return ious # (batch_size, n_cell_y, n_cell_x)
+
+
 
 def test_dynamic_iou():
   pass
@@ -145,3 +149,20 @@ def draw_boxes(img, boxes: List[List[float]]):
 # )
 # show_img(boxed_img)
 # print(boxed_img.shape)
+
+
+
+import logging
+import tqdm
+
+class TqdmLoggingHandler(logging.Handler):
+  def __init__(self, level=logging.NOTSET):
+    super().__init__(level)
+
+  def emit(self, record):
+    try:
+      msg = self.format(record)
+      tqdm.tqdm.write(msg)
+      self.flush()
+    except Exception:
+      self.handleError(record) 

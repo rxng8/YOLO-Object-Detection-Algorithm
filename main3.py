@@ -11,12 +11,15 @@ import pickle
 import tensorflow as tf
 print(f"Tensorflow version: {tf.__version__}")
 print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
+import tensorflow.keras.layers as L
 import numpy as np
 import pandas as pd
 from PIL import Image
 import matplotlib.pyplot as plt
 %matplotlib inline
 import cv2
+
+import tqdm
 
 from yolo.const import *
 from yolo.utils import draw_boxes, dynamic_iou, iou, show_img, preprocess_image
@@ -30,8 +33,8 @@ train_image_folder = os.path.join(dataset_root, "train")
 test_image_folder = os.path.join(dataset_root, "val")
 
 data_pile_path = "./dataset/coco/pickle/dump.npy"
-training_history_path = "./training_history/history4.npy"
-model_weights_path = "./weights/checkpoint4"
+training_history_path = "./training_history/history6.npy"
+model_weights_path = "./weights/checkpoint6"
 
 # Data format
 # https://cocodataset.org/#format-data
@@ -278,34 +281,122 @@ test_dataset = tf.data.Dataset.from_generator(test_gen, output_signature={
   "input": tf.TensorSpec(shape=(*image_size, n_channels), dtype=tf.float32),
   "output": tf.TensorSpec(shape=(n_cell_y, n_cell_x, n_class + 5), dtype=tf.float32)
 })
-
+test_dataset_iter = iter(test_dataset)
 test_batch_dataset = train_dataset.batch(batch_size=BATCH_SIZE)
 test_batch_iter = iter(test_batch_dataset)
 
 optimizer = tf.keras.optimizers.SGD(learning_rate=learning_rate)
 
-model = SimpleYolo2(
-  input_shape=(*image_size, n_channels),
-  n_out=n_class + 5,
-  n_class=n_class
-)
+# %%
 
-if os.path.exists(model_weights_path + ".index"):
-  print("Model weights loaded!")
-  model.load_weights(model_weights_path)
+# model = SimpleYolo2(
+#   input_shape=(*image_size, n_channels),
+#   n_out=n_class + 5,
+#   n_class=n_class
+# )
+
+# if os.path.exists(model_weights_path + ".index"):
+#   print("Model weights loaded!")
+#   model.load_weights(model_weights_path)
+
+
+# %%
+
+class ConvBlock(tf.keras.layers.Layer):
+  def __init__(self, filters, kernel_size, alpha=0.1, **kwargs) -> None:
+    super().__init__(**kwargs)
+    self.filters = filters
+    self.kernel_size = kernel_size
+    self.alpha = alpha
+  
+  def build(self, input_shape):
+    self.conv = L.Conv2D(self.filters, self.kernel_size, padding="same")
+
+  def call(self, inputs):
+    tensor = self.conv(inputs)
+    tensor = L.BatchNormalization()(tensor)
+    out = L.LeakyReLU(alpha=self.alpha)(tensor)
+    return out
+
+class YoloHead(tf.keras.layers.Layer):
+  def __init__(self, **kwargs) -> None:
+    super().__init__(**kwargs)
+  
+  def build(self, input_shape):
+    pass
+
+  def call(self, inputs):
+    tensor_class = inputs[..., :-5]
+    # tensor_class = L.Softmax()(tensor_class) # We dont use this because we
+    # directly use tf.nn.softmax_cross_entropy_with_logits
+
+    tensor_xy = inputs[..., -5:-3]
+    tensor_xy = tf.nn.sigmoid(tensor_xy)
+
+    tensor_wh = inputs[..., -3:-1]
+    tensor_conf = inputs[..., -1:]
+    tensor_conf = tf.nn.sigmoid(tensor_conf)
+
+    tensor = tf.concat([tensor_class, tensor_xy, tensor_wh, tensor_conf], axis=-1)
+    return tensor
+
+def SimpleYolo3(input_shape, n_out, n_class):
+
+  model = tf.keras.Sequential()
+  model.add(L.Input(shape=input_shape))
+
+  configs = [
+    ["block", 32, (3,3)],
+    ["block", 64, (3,3)],
+    ["mp"],
+    ["block", 64, (3,3)],
+    ["block", 128, (3,3)],
+    ["mp"],
+    ["block", 128, (3,3)],
+    ["block", 256, (3,3)],
+    ["mp"],
+    ["block", 256, (3,3)],
+    ["block", 512, (3,3)],
+    ["mp"],
+    ["block", 512, (3,3)],
+    ["block", 1024, (3,3)],
+    ["conv", n_out, (3, 3)]
+  ]
+
+  for i, config in enumerate(configs):
+    if config[0] == "mp":
+      model.add(L.MaxPool2D(2,2, name=f"max_pool_{i}"))
+    elif config[0] == "block":
+      model.add(ConvBlock(config[1], config[2], alpha=0.1))
+    elif config[0] == "conv":
+      model.add(L.Conv2D(config[1], config[2], padding="same"))
+
+  model.add(YoloHead())
+
+  return model
+
+
+model = SimpleYolo3((*image_size, n_channels), n_class + 5, n_class)
+model.summary()
+with tf.device("/CPU:0"):
+  test_logits = tf.random.normal((BATCH_SIZE, *image_size, n_channels), mean=0.5, stddev=0.3)
+  test_pred = model(test_logits, training=False)
+  print(test_pred.shape)
 
 # %%
 
 ## Training
 
-def train_step(batch_x, batch_label, test_batch_iter, model, loss_function, optimizer, step=-1):
+def train_step(batch_x, batch_label, model, loss_function, optimizer, debug=False):
   with tf.device("/GPU:0"):
     with tf.GradientTape() as tape:
       logits = model(batch_x, training=True)
-      loss = loss_function(batch_label, logits)
+      loss, [loss_xy, loss_wh, loss_conf, loss_class] = loss_function(batch_label, logits)
     grads = tape.gradient(loss, model.trainable_weights)
     optimizer.apply_gradients(zip(grads, model.trainable_weights))
-  return loss
+  if debug:
+    return logits, loss, [loss_xy, loss_wh, loss_conf, loss_class]
+  return loss, [loss_xy, loss_wh, loss_conf, loss_class]
 
 def train(model, 
         training_batch_iter, 
@@ -323,38 +414,50 @@ def train(model,
   epochs_loss = epochs_loss.tolist()
   epochs_val_loss = epochs_val_loss.tolist()
 
+  # https://philipplies.medium.com/progress-bar-and-status-logging-in-python-with-tqdm-35ce29b908f5
+  # outer_tqdm = tqdm(total=epochs, desc='Epoch', position=0)
+  loss_logging = tqdm.tqdm(total=0, bar_format='{desc}', position=1)
+  
   for epoch in range(epochs):
     losses = []
+    val_losses = []
 
-    with tf.device("/CPU:0"):
-      step_pointer = 0
-      while step_pointer < steps_per_epoch:
-        batch = next(training_batch_iter)
-        batch_x = batch["input"]
-        batch_label = batch["output"]
-        loss = train_step(batch_x, batch_label, test_batch_iter, model, loss_function, optimizer, step=step_pointer + 1)
-        print(f"Epoch {epoch + 1} - Step {step_pointer + 1} - Loss: {loss}")
-        losses.append(loss)
+    # https://towardsdatascience.com/training-models-with-a-progress-a-bar-2b664de3e13e
+    # https://www.geeksforgeeks.org/python-how-to-make-a-terminal-progress-bar-using-tqdm/
+    with tqdm.tqdm(total=steps_per_epoch, desc=f"Epoch {epoch + 1}", position=0, ncols=100, ascii =".>") as inner_tqdm:
+      with tf.device("/CPU:0"):
+        for step_pointer in range(steps_per_epoch):
+          batch = next(training_batch_iter)
+          batch_x = batch["input"]
+          batch_label = batch["output"]
+          loss, [loss_xy, loss_wh, loss_conf, loss_class] = train_step(
+            batch_x, batch_label, 
+            model, loss_function, optimizer)
 
-        if step_pointer % valid_step == 0:
-          print(
-              "Training loss (for one batch) at step %d: %.4f"
-              % (step_pointer + 1, float(loss))
-          )
-          # perform validation
-          val_batch = next(test_batch_iter)
-          logits = model(val_batch["input"], training=False)
-          val_loss = loss_function(val_batch["output"], logits)
-          print(f"Validation loss: {val_loss}\n-----------------")
+          # Log?
+          desc = f"Epoch {epoch + 1} - Step {step_pointer + 1} - Loss: {loss}"
+          # loss_logging.set_description_str(desc)
+          # print()
 
-        if step_pointer + 1 == steps_per_epoch:
-          val_batch = next(test_batch_iter)
-          logits = model(val_batch["input"], training=False)
-          val_loss = loss_function(val_batch["output"], logits)
-          epochs_val_loss.append(val_loss)
+          losses.append((loss, [loss_xy, loss_wh, loss_conf, loss_class]))
 
-        step_pointer += 1
+          if (step_pointer + 1) % valid_step == 0:
+            # desc = f"Training loss (for one batch) at step {step_pointer + 1}: {float(loss)}"
+            # print(desc)
+            # loss_logging.set_description_str(desc)
+
+            # perform validation
+            val_batch = next(test_batch_iter)
+            logits = model(val_batch["input"], training=False)
+            val_loss, [val_loss_xy, val_loss_wh, val_loss_conf, val_loss_class] = loss_function(val_batch["output"], logits)
+            val_losses.append((val_loss, [val_loss_xy, val_loss_wh, val_loss_conf, val_loss_class]))
+            # print(f"Validation loss: {val_loss}\n-----------------")
+
+          inner_tqdm.set_postfix_str(f"Loss: {loss}")
+          inner_tqdm.update(1)
+
     epochs_loss.append(losses)
+    epochs_val_loss.append(val_loss)
 
     # Save history and model
     if history_path != None:
@@ -362,9 +465,135 @@ def train(model,
     
     if weights_path != None:
       model.save_weights(weights_path)
-  
+
+    # outer_tqdm.update(1)
+
   # return history
   return [epochs_loss, epochs_val_loss]
+
+
+# %%
+
+def yolo_loss_2(y_true, y_pred):
+  # reference: https://mlblr.com/includes/mlai/index.html#yolov2
+  # reference: https://blog.emmanuelcaradec.com/humble-yolo-implementation-in-keras/
+  # (batch_size, n_box_y, n_box_x, n_anchor, n_out)
+  
+  mask_shape = tf.shape(y_true)[:-1]
+
+  pred_box_xy = y_pred[..., -5:-3]
+  pred_box_wh = y_pred[..., -3:-1] # Adjust prediction
+  pred_box_conf = y_pred[..., -1]
+  pred_box_class = y_pred[..., :-5]
+
+  true_box_xy = y_true[..., -5:-3]
+  true_box_wh = y_true[..., -3:-1]
+  true_box_conf = y_true[..., -1] # Shape (batch, 20, 20)
+  true_box_class = y_true[..., :-5]
+
+  # The 1_ij of the object (the ground truth of the resonsible box)
+  coord_mask = y_true[..., -1:] * LAMBDA_COORD # Shape (batch, 20, 20, 1)
+
+  # conf_mask
+  conf_mask = tf.zeros(mask_shape)
+
+  # class mask
+  class_mask = y_true[..., -1] * LAMBDA_CLASS # Shape (batch, 20, 20)
+
+  # Adjust the label confidence by multiplying the labeled confidence with the actual iou after predicted
+  ious = dynamic_iou(y_true[..., -5:-1], y_pred[..., -5:-1]) # Shape (batch, 20, 20)
+  true_box_conf = true_box_conf * ious # Shape (batch, 20, 20) x (batch, 20, 20) = (batch, 20, 20)
+
+  conf_mask += tf.cast(ious < CONFIDENCE_THHRESHOLD, dtype=tf.float32) * (1 - y_true[..., -1]) * LAMBDA_NOOBJ
+
+  conf_mask += y_true[..., -1] * LAMBDA_OBJ
+
+  # Finalize the loss
+
+  # compute the number of position that we are actually backpropagating
+  nb_coord_box = tf.reduce_sum(tf.cast(coord_mask > 0.0, dtype=tf.float32))
+  nb_conf_box  = tf.reduce_sum(tf.cast(conf_mask  > 0.0, dtype=tf.float32))
+  nb_class_box = tf.reduce_sum(tf.cast(class_mask > 0.0, dtype=tf.float32))
+
+  loss_xy = tf.reduce_sum(tf.square(true_box_xy - pred_box_xy) * coord_mask) / (nb_coord_box + EPSILON) / 2. # divide by two cuz that's the mse
+  loss_wh = tf.reduce_sum(tf.square(true_box_wh - pred_box_wh) * coord_mask) / (nb_coord_box + EPSILON) / 2. # divide by two cuz that's the mse
+  loss_conf = tf.reduce_sum(tf.square(true_box_conf - pred_box_conf) * conf_mask) / (nb_conf_box + EPSILON) / 2.
+  loss_class = tf.reduce_sum(
+    tf.nn.softmax_cross_entropy_with_logits(true_box_class, pred_box_class, axis=-1) * class_mask
+  ) / nb_class_box
+
+  loss = loss_xy + loss_wh + loss_conf + loss_class
+  return loss, [loss_xy, loss_wh, loss_conf, loss_class]
+
+
+# Debug training
+
+loop = 100
+
+# Test yolo_loss_2
+for i in range(loop):
+  sample = next(train_batch_iter)
+  # print(f" Sample_true shape: {sample["output"].shape}")
+
+  logits, loss, [loss_xy, loss_wh, loss_conf, loss_class] = train_step(
+              sample["input"], sample["output"], 
+              model, yolo_loss_2, optimizer, debug=True)
+
+  print(f"loss: {loss}, loss_xy: {loss_xy}, loss_wh: {loss_wh}, loss_conf: {loss_conf}, loss_class: {loss_class}")
+
+# %%
+
+# Vidualize intermediate layers
+
+layer_list = [l for l in model.layers]
+debugging_model = tf.keras.Model(model.inputs, [l.output for l in layer_list])
+layer_list
+
+# %%
+
+sample = next(test_batch_iter)
+sample_x = sample["input"]
+sample_y_true = sample["output"]
+
+y_pred_list = debugging_model(sample_x, training=False)
+
+# %%
+
+
+f, axarr = plt.subplots(4,4, figsize=(25,15))
+TEST_BATCH_ID = 0
+CONVOLUTION_NUMBER_LIST = [2, 4, 10, 15]
+LAYER_LIST = [0, 3, 6, 9]
+
+for x, CONVOLUTION_NUMBER in enumerate(CONVOLUTION_NUMBER_LIST):
+  f1 = y_pred_list[LAYER_LIST[0]]
+  axarr[0,x].imshow(f1[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
+  axarr[0,x].grid(False)
+
+  f2 = y_pred_list[LAYER_LIST[1]]
+  axarr[1,x].imshow(f2[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
+  axarr[1,x].grid(False)
+
+  f3 = y_pred_list[LAYER_LIST[2]]
+  axarr[2,x].imshow(f3[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
+  axarr[2,x].grid(False)
+
+  f4 = y_pred_list[LAYER_LIST[3]]
+  axarr[3,x].imshow(f4[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
+  axarr[3,x].grid(False)
+  
+  
+axarr[0,0].set_ylabel("After convolution layer 1")
+axarr[1,0].set_ylabel("After convolution layer 2")
+axarr[2,0].set_ylabel("After convolution layer 3")
+axarr[3,0].set_ylabel("After convolution layer 7")
+
+axarr[0,0].set_title("convolution number 0")
+axarr[0,1].set_title("convolution number 4")
+axarr[0,2].set_title("convolution number 7")
+axarr[0,3].set_title("convolution number 23")
+
+plt.show()
 
 
 # %%
@@ -383,7 +612,7 @@ history = train(
   train_batch_iter,
   test_batch_iter,
   optimizer,
-  yolo_loss,
+  yolo_loss_2,
   history,
   epochs=2,
   steps_per_epoch=5000, # 82783 // 16
@@ -411,8 +640,10 @@ history = train(
 
 val_batch = next(test_batch_iter)
 logits = model(val_batch["input"], training=False)
-val_loss = yolo_loss(val_batch["output"], logits)
-print(f"Validation loss: {val_loss}")
+val_loss, [lxy, lwh, lconf, lcls] = yolo_loss_2(val_batch["output"], logits)
+
+print(f"Validation loss: {val_loss}, loss xy: {lxy}, loss width height: {lwh}, loss conf: {lconf}, loss class: {lcls}")
+
 
 sample_id = 0
 sample_img = val_batch["input"][sample_id]
@@ -423,7 +654,7 @@ show_img(sample_img)
 print(sample_label.shape)
 assert sample_label.shape == sample_pred.shape
 
-confidence_threshold = 0.0005
+confidence_threshold = 0.1
 boxed_img = tf.convert_to_tensor(sample_img)
 for yth_cell in range(sample_pred.shape[0]):
   for xth_cell in range(sample_pred.shape[1]):
@@ -521,6 +752,7 @@ sample_img = sample_data["input"]
 sample_label = sample_data["output"]
 sample_id = 1
 
+
 # %%
 show_img(sample_img[sample_id])
 # %%
@@ -564,6 +796,8 @@ cell_list
 # %%
 
 sample_pred = model(sample_img)
+
+
 # %%
 
 sample_pred_item = sample_pred[sample_id]
@@ -574,7 +808,9 @@ sample_label_item = sample_label[sample_id]
 
 # %%
 
-loss = yolo_loss(sample_label, sample_pred)
+loss, [lxy, lwh, lconf, lcls] = yolo_loss_2(sample_label, sample_pred)
+
+print(f"loss: {loss}, loss xy: {lxy}, loss width height: {lwh}, loss conf: {lconf}, loss class: {lcls}")
 
 # %%
 
@@ -619,7 +855,7 @@ intersection = tf.math.maximum(0, min_x2 - max_x1) * tf.math.maximum(0, min_y2 -
 # (batch_size, n_cell_y, n_cell_x)
 union = tf.squeeze((x2_A - x1_A) * (y2_A - y1_A) + (x2_B - x1_B) * (y2_B - y1_B), axis=-1) - intersection
 
-lala = (intersection + 1e-9) / (union + 1e-9)
+lala = (intersection + EPSILON) / (union + EPSILON)
 
 # %%
 
