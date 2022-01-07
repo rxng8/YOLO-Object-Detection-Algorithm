@@ -14,10 +14,11 @@ print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
 import tensorflow.keras.layers as L
 import numpy as np
 import pandas as pd
-from PIL import Image
+from PIL import ImageDraw, ImageFont, Image
 import matplotlib.pyplot as plt
 %matplotlib inline
 import cv2
+
 
 import tqdm
 
@@ -299,83 +300,6 @@ optimizer = tf.keras.optimizers.SGD(learning_rate=learning_rate)
 #   print("Model weights loaded!")
 #   model.load_weights(model_weights_path)
 
-
-# %%
-
-class ConvBlock(tf.keras.layers.Layer):
-  def __init__(self, filters, kernel_size, alpha=0.1, **kwargs) -> None:
-    super().__init__(**kwargs)
-    self.filters = filters
-    self.kernel_size = kernel_size
-    self.alpha = alpha
-  
-  def build(self, input_shape):
-    self.conv = L.Conv2D(self.filters, self.kernel_size, padding="same")
-
-  def call(self, inputs):
-    tensor = self.conv(inputs)
-    tensor = L.BatchNormalization()(tensor)
-    out = L.LeakyReLU(alpha=self.alpha)(tensor)
-    return out
-
-class YoloHead(tf.keras.layers.Layer):
-  def __init__(self, **kwargs) -> None:
-    super().__init__(**kwargs)
-  
-  def build(self, input_shape):
-    pass
-
-  def call(self, inputs):
-    tensor_class = inputs[..., :-5]
-    # tensor_class = L.Softmax()(tensor_class) # We dont use this because we
-    # directly use tf.nn.softmax_cross_entropy_with_logits
-
-    tensor_xy = inputs[..., -5:-3]
-    tensor_xy = tf.nn.sigmoid(tensor_xy)
-
-    tensor_wh = inputs[..., -3:-1]
-    tensor_conf = inputs[..., -1:]
-    tensor_conf = tf.nn.sigmoid(tensor_conf)
-
-    tensor = tf.concat([tensor_class, tensor_xy, tensor_wh, tensor_conf], axis=-1)
-    return tensor
-
-def SimpleYolo3(input_shape, n_out, n_class):
-
-  model = tf.keras.Sequential()
-  model.add(L.Input(shape=input_shape))
-
-  configs = [
-    ["block", 32, (3,3)],
-    ["block", 64, (3,3)],
-    ["mp"],
-    ["block", 64, (3,3)],
-    ["block", 128, (3,3)],
-    ["mp"],
-    ["block", 128, (3,3)],
-    ["block", 256, (3,3)],
-    ["mp"],
-    ["block", 256, (3,3)],
-    ["block", 512, (3,3)],
-    ["mp"],
-    ["block", 512, (3,3)],
-    ["block", 1024, (3,3)],
-    ["conv", n_out, (3, 3)]
-  ]
-
-  for i, config in enumerate(configs):
-    if config[0] == "mp":
-      model.add(L.MaxPool2D(2,2, name=f"max_pool_{i}"))
-    elif config[0] == "block":
-      model.add(ConvBlock(config[1], config[2], alpha=0.1))
-    elif config[0] == "conv":
-      model.add(L.Conv2D(config[1], config[2], padding="same"))
-
-  model.add(YoloHead())
-
-  return model
-
-
 model = SimpleYolo3((*image_size, n_channels), n_class + 5, n_class)
 model.summary()
 with tf.device("/CPU:0"):
@@ -474,72 +398,36 @@ def train(model,
 
 # %%
 
-def yolo_loss_2(y_true, y_pred):
-  # reference: https://mlblr.com/includes/mlai/index.html#yolov2
-  # reference: https://blog.emmanuelcaradec.com/humble-yolo-implementation-in-keras/
-  # (batch_size, n_box_y, n_box_x, n_anchor, n_out)
-  
-  mask_shape = tf.shape(y_true)[:-1]
-
-  pred_box_xy = y_pred[..., -5:-3]
-  pred_box_wh = y_pred[..., -3:-1] # Adjust prediction
-  pred_box_conf = y_pred[..., -1]
-  pred_box_class = y_pred[..., :-5]
-
-  true_box_xy = y_true[..., -5:-3]
-  true_box_wh = y_true[..., -3:-1]
-  true_box_conf = y_true[..., -1] # Shape (batch, 20, 20)
-  true_box_class = y_true[..., :-5]
-
-  # The 1_ij of the object (the ground truth of the resonsible box)
-  coord_mask = y_true[..., -1:] * LAMBDA_COORD # Shape (batch, 20, 20, 1)
-
-  # conf_mask
-  conf_mask = tf.zeros(mask_shape)
-
-  # class mask
-  class_mask = y_true[..., -1] * LAMBDA_CLASS # Shape (batch, 20, 20)
-
-  # Adjust the label confidence by multiplying the labeled confidence with the actual iou after predicted
-  ious = dynamic_iou(y_true[..., -5:-1], y_pred[..., -5:-1]) # Shape (batch, 20, 20)
-  true_box_conf = true_box_conf * ious # Shape (batch, 20, 20) x (batch, 20, 20) = (batch, 20, 20)
-
-  conf_mask += tf.cast(ious < CONFIDENCE_THHRESHOLD, dtype=tf.float32) * (1 - y_true[..., -1]) * LAMBDA_NOOBJ
-
-  conf_mask += y_true[..., -1] * LAMBDA_OBJ
-
-  # Finalize the loss
-
-  # compute the number of position that we are actually backpropagating
-  nb_coord_box = tf.reduce_sum(tf.cast(coord_mask > 0.0, dtype=tf.float32))
-  nb_conf_box  = tf.reduce_sum(tf.cast(conf_mask  > 0.0, dtype=tf.float32))
-  nb_class_box = tf.reduce_sum(tf.cast(class_mask > 0.0, dtype=tf.float32))
-
-  loss_xy = tf.reduce_sum(tf.square(true_box_xy - pred_box_xy) * coord_mask) / (nb_coord_box + EPSILON) / 2. # divide by two cuz that's the mse
-  loss_wh = tf.reduce_sum(tf.square(true_box_wh - pred_box_wh) * coord_mask) / (nb_coord_box + EPSILON) / 2. # divide by two cuz that's the mse
-  loss_conf = tf.reduce_sum(tf.square(true_box_conf - pred_box_conf) * conf_mask) / (nb_conf_box + EPSILON) / 2.
-  loss_class = tf.reduce_sum(
-    tf.nn.softmax_cross_entropy_with_logits(true_box_class, pred_box_class, axis=-1) * class_mask
-  ) / nb_class_box
-
-  loss = loss_xy + loss_wh + loss_conf + loss_class
-  return loss, [loss_xy, loss_wh, loss_conf, loss_class]
-
-
 # Debug training
-
-loop = 100
+loop=1
+test_batch_id=0
+verbose=True
 
 # Test yolo_loss_2
 for i in range(loop):
-  sample = next(train_batch_iter)
+  sample = next(test_batch_iter)
+  sample_input = sample["input"]
+  sample_output = sample["output"]
   # print(f" Sample_true shape: {sample["output"].shape}")
+  if verbose:
+    # show_img(sample_input[test_batch_id])
+    show_img_with_bbox(sample_input, 
+      sample_output, test_batch_id, confidence_score=0.5)
 
   logits, loss, [loss_xy, loss_wh, loss_conf, loss_class] = train_step(
-              sample["input"], sample["output"], 
+              sample_input, sample_output, 
               model, yolo_loss_2, optimizer, debug=True)
 
+  if verbose:
+    show_img_with_bbox(sample_input, 
+      logits, test_batch_id, confidence_score=0.4)
+
   print(f"loss: {loss}, loss_xy: {loss_xy}, loss_wh: {loss_wh}, loss_conf: {loss_conf}, loss_class: {loss_class}")
+
+
+# show_img_with_bbox(sample_input, 
+#       logits, test_batch_id, confidence_score=0.4)
+
 
 # %%
 
@@ -560,9 +448,9 @@ y_pred_list = debugging_model(sample_x, training=False)
 # %%
 
 
-f, axarr = plt.subplots(4,4, figsize=(25,15))
+f, axarr = plt.subplots(4,8, figsize=(25,15))
 TEST_BATCH_ID = 0
-CONVOLUTION_NUMBER_LIST = [2, 4, 10, 15]
+CONVOLUTION_NUMBER_LIST = [2, 4, 10, 15, 16, 17, 18, 19]
 LAYER_LIST = [0, 3, 6, 9]
 
 for x, CONVOLUTION_NUMBER in enumerate(CONVOLUTION_NUMBER_LIST):
@@ -598,6 +486,9 @@ plt.show()
 
 # %%
 
+
+########### TRAINING #############
+
 if not os.path.exists(training_history_path):
   epochs_val_loss = np.array([])
   epochs_loss = np.array([])
@@ -620,13 +511,6 @@ history = train(
   weights_path=model_weights_path
 )
 
-# %%
-# MAnually save things!
-# model.save_weights(model_weights_path)
-# np.save(training_history_path, history)
-
-# %%
-
 # TODO: History integration. DONE!
 # TODO: mAP metrics
 # TODO: Tensorboard integration
@@ -637,8 +521,15 @@ history = train(
 
 # %%
 
+# MAnually save weights and history!
+# model.save_weights(model_weights_path)
+# np.save(training_history_path, history)
 
-val_batch = next(test_batch_iter)
+# %%
+
+############## EVALUATION ##############
+
+val_batch = next(train_batch_iter)
 logits = model(val_batch["input"], training=False)
 val_loss, [lxy, lwh, lconf, lcls] = yolo_loss_2(val_batch["output"], logits)
 
@@ -654,7 +545,7 @@ show_img(sample_img)
 print(sample_label.shape)
 assert sample_label.shape == sample_pred.shape
 
-confidence_threshold = 0.1
+confidence_threshold = 0.49
 boxed_img = tf.convert_to_tensor(sample_img)
 for yth_cell in range(sample_pred.shape[0]):
   for xth_cell in range(sample_pred.shape[1]):
@@ -885,6 +776,8 @@ loss_conf = tf.square(label_conf * identity_obj - sample_pred[..., -1] * identit
 
 # element wise addition
 loss = (loss_xy + loss_wh + loss_class + loss_conf)
+
+
 
 
 

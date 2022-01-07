@@ -197,3 +197,79 @@ class SimpleYolo2(tf.keras.Model):
   def call(self, x):
     out = self.model(x)
     return out
+
+
+
+
+class ConvBlock(tf.keras.layers.Layer):
+  def __init__(self, filters, kernel_size, alpha=0.1, **kwargs) -> None:
+    super().__init__(**kwargs)
+    self.filters = filters
+    self.kernel_size = kernel_size
+    self.alpha = alpha
+  
+  def build(self, input_shape):
+    self.conv = L.Conv2D(self.filters, self.kernel_size, padding="same")
+
+  def call(self, inputs):
+    tensor = self.conv(inputs)
+    tensor = L.BatchNormalization()(tensor)
+    out = L.LeakyReLU(alpha=self.alpha)(tensor)
+    return out
+
+class YoloHead(tf.keras.layers.Layer):
+  def __init__(self, **kwargs) -> None:
+    super().__init__(**kwargs)
+  
+  def build(self, input_shape):
+    pass
+
+  def call(self, inputs):
+    tensor_class = inputs[..., :-5]
+    # tensor_class = L.Softmax()(tensor_class) # We dont use this because we
+    # directly use tf.nn.softmax_cross_entropy_with_logits
+
+    tensor_xy = inputs[..., -5:-3]
+    tensor_xy = tf.nn.sigmoid(tensor_xy)
+
+    tensor_wh = inputs[..., -3:-1]
+    tensor_conf = inputs[..., -1:]
+    tensor_conf = tf.nn.sigmoid(tensor_conf)
+
+    tensor = tf.concat([tensor_class, tensor_xy, tensor_wh, tensor_conf], axis=-1)
+    return tensor
+
+def SimpleYolo3(input_shape, n_out, n_class):
+
+  model = tf.keras.Sequential()
+  model.add(L.Input(shape=input_shape))
+
+  configs = [
+    ["block", 32, (3,3)],
+    ["block", 64, (3,3)],
+    ["mp"],
+    ["block", 64, (3,3)],
+    ["block", 128, (3,3)],
+    ["mp"],
+    ["block", 128, (3,3)],
+    ["block", 256, (3,3)],
+    ["mp"],
+    ["block", 256, (3,3)],
+    ["block", 512, (3,3)],
+    ["mp"],
+    ["block", 512, (3,3)],
+    ["block", 1024, (3,3)],
+    ["conv", n_out, (3, 3)]
+  ]
+
+  for i, config in enumerate(configs):
+    if config[0] == "mp":
+      model.add(L.MaxPool2D(2,2, name=f"max_pool_{i}"))
+    elif config[0] == "block":
+      model.add(ConvBlock(config[1], config[2], alpha=0.1))
+    elif config[0] == "conv":
+      model.add(L.Conv2D(config[1], config[2], padding="same"))
+
+  model.add(YoloHead())
+
+  return model

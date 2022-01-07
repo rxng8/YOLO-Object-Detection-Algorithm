@@ -60,3 +60,56 @@ def yolo_loss(true, pred):
 
   batch_loss = tf.reduce_sum(loss) / BATCH_SIZE
   return batch_loss
+
+
+
+def yolo_loss_2(y_true, y_pred):
+  # reference: https://mlblr.com/includes/mlai/index.html#yolov2
+  # reference: https://blog.emmanuelcaradec.com/humble-yolo-implementation-in-keras/
+  # (batch_size, n_box_y, n_box_x, n_anchor, n_out)
+  
+  mask_shape = tf.shape(y_true)[:-1]
+
+  pred_box_xy = y_pred[..., -5:-3]
+  pred_box_wh = y_pred[..., -3:-1] # Adjust prediction
+  pred_box_conf = y_pred[..., -1]
+  pred_box_class = y_pred[..., :-5]
+
+  true_box_xy = y_true[..., -5:-3]
+  true_box_wh = y_true[..., -3:-1]
+  true_box_conf = y_true[..., -1] # Shape (batch, 20, 20)
+  true_box_class = y_true[..., :-5]
+
+  # The 1_ij of the object (the ground truth of the resonsible box)
+  coord_mask = y_true[..., -1:] * LAMBDA_COORD # Shape (batch, 20, 20, 1)
+
+  # conf_mask
+  conf_mask = tf.zeros(mask_shape)
+
+  # class mask
+  class_mask = y_true[..., -1] * LAMBDA_CLASS # Shape (batch, 20, 20)
+
+  # Adjust the label confidence by multiplying the labeled confidence with the actual iou after predicted
+  ious = dynamic_iou(y_true[..., -5:-1], y_pred[..., -5:-1]) # Shape (batch, 20, 20)
+  true_box_conf = true_box_conf * ious # Shape (batch, 20, 20) x (batch, 20, 20) = (batch, 20, 20)
+
+  conf_mask += tf.cast(ious < CONFIDENCE_THHRESHOLD, dtype=tf.float32) * (1 - y_true[..., -1]) * LAMBDA_NOOBJ
+
+  conf_mask += y_true[..., -1] * LAMBDA_OBJ
+
+  # Finalize the loss
+
+  # compute the number of position that we are actually backpropagating
+  nb_coord_box = tf.reduce_sum(tf.cast(coord_mask > 0.0, dtype=tf.float32))
+  nb_conf_box  = tf.reduce_sum(tf.cast(conf_mask  > 0.0, dtype=tf.float32))
+  nb_class_box = tf.reduce_sum(tf.cast(class_mask > 0.0, dtype=tf.float32))
+
+  loss_xy = tf.reduce_sum(tf.square(true_box_xy - pred_box_xy) * coord_mask) / (nb_coord_box + EPSILON) / 2. # divide by two cuz that's the mse
+  loss_wh = tf.reduce_sum(tf.square(true_box_wh - pred_box_wh) * coord_mask) / (nb_coord_box + EPSILON) / 2. # divide by two cuz that's the mse
+  loss_conf = tf.reduce_sum(tf.square(true_box_conf - pred_box_conf) * conf_mask) / (nb_conf_box + EPSILON) / 2.
+  loss_class = tf.reduce_sum(
+    tf.nn.softmax_cross_entropy_with_logits(true_box_class, pred_box_class, axis=-1) * class_mask
+  ) / nb_class_box
+
+  loss = loss_xy + loss_wh + loss_conf + loss_class
+  return loss, [loss_xy, loss_wh, loss_conf, loss_class]
