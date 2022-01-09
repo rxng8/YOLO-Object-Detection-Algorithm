@@ -16,7 +16,7 @@ def iou(A, B):
   intersection = (min(xmax1, xmax2) - max(xmin1, xmin2)) * (min(ymax1, ymax2) - max(ymin1, ymin2))
   intersection = max(0, intersection)
   union = (xmax1 - xmin1) * (ymax1 - ymin1) + (xmax2 - xmin2) * (ymax2 - ymin2) - intersection
-  return float(intersection + 1e-9) / (union + 1e-9)
+  return float(intersection + EPSILON) / (union + EPSILON)
 
 def dynamic_iou(A, B):
   """

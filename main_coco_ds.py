@@ -26,7 +26,7 @@ from yolo.const import *
 from yolo.utils import draw_boxes, dynamic_iou, iou, show_img, preprocess_image, show_img_with_bbox
 from yolo.model import SimpleModel, \
   SimpleModel2, SimpleYolo, SimpleYolo2, testSimpleYolo, \
-  SimpleYolo3, SimpleYolo4
+  SimpleYolo3, SimpleYolo4, make_yolov3_model
 from yolo.loss import yolo_loss, simple_mse_loss, yolo_loss_2
 
 dataset_root = "./dataset/coco"
@@ -36,8 +36,8 @@ train_image_folder = os.path.join(dataset_root, "train")
 test_image_folder = os.path.join(dataset_root, "val")
 
 data_pile_path = "./dataset/coco/pickle/dump.npy"
-training_history_path = "./training_history/history7.npy"
-model_weights_path = "./weights/checkpoint7"
+training_history_path = "./training_history/history8.npy"
+model_weights_path = "./weights/checkpoint8"
 
 # Data format
 # https://cocodataset.org/#format-data
@@ -154,7 +154,7 @@ def train_gen():
       original_img = np.asarray(Image.open(image_path))
       original_width = id_to_train_image_metadata[image_id]["width"]
       original_height = id_to_train_image_metadata[image_id]["height"]
-      preprocessed_img = preprocess_image(original_img, image_size=image_size)
+      preprocessed_img = preprocess_image(original_img, image_size=example_image_size)
       # show_img(preprocessed_img)
 
       label = np.zeros(
@@ -218,7 +218,7 @@ def test_gen():
       original_img = np.asarray(Image.open(image_path))
       original_width = id_to_test_image_metadata[image_id]["width"]
       original_height = id_to_test_image_metadata[image_id]["height"]
-      preprocessed_img = preprocess_image(original_img, image_size=image_size)
+      preprocessed_img = preprocess_image(original_img, image_size=example_image_size)
       label = np.zeros(
         shape=(n_cell_y, n_cell_x, n_class + 5),
         dtype=float
@@ -273,7 +273,7 @@ def datagen_testing(train_gen, n_iter=1):
 # %%
 
 train_dataset = tf.data.Dataset.from_generator(train_gen, output_signature={
-  "input": tf.TensorSpec(shape=(*image_size, n_channels), dtype=tf.float32),
+  "input": tf.TensorSpec(shape=(*example_image_size, n_channels), dtype=tf.float32),
   "output": tf.TensorSpec(shape=(n_cell_y, n_cell_x, n_class + 5), dtype=tf.float32)
 })
 print(train_dataset.element_spec)
@@ -281,7 +281,7 @@ train_batch_dataset = train_dataset.batch(batch_size=BATCH_SIZE)
 train_batch_iter = iter(train_batch_dataset)
 
 test_dataset = tf.data.Dataset.from_generator(test_gen, output_signature={
-  "input": tf.TensorSpec(shape=(*image_size, n_channels), dtype=tf.float32),
+  "input": tf.TensorSpec(shape=(*example_image_size, n_channels), dtype=tf.float32),
   "output": tf.TensorSpec(shape=(n_cell_y, n_cell_x, n_class + 5), dtype=tf.float32)
 })
 test_dataset_iter = iter(test_dataset)
@@ -298,10 +298,11 @@ optimizer = tf.keras.optimizers.SGD(learning_rate=learning_rate)
 #   n_class=n_class
 # )
 
-model: tf.keras.Model = SimpleYolo4((*image_size, n_channels), n_class + 5, n_class)
+# model: tf.keras.Model = SimpleYolo4((*image_size, n_channels), n_class + 5, n_class) # 17, 17
+model: tf.keras.Model = make_yolov3_model()
 model.summary()
 with tf.device("/CPU:0"):
-  test_logits = tf.random.normal((BATCH_SIZE, *image_size, n_channels), mean=0.5, stddev=0.3)
+  test_logits = tf.random.normal((BATCH_SIZE, *example_image_size, n_channels), mean=0.5, stddev=0.3)
   test_pred = model(test_logits, training=False)
   print(test_pred.shape)
 
@@ -443,13 +444,172 @@ for i in range(loop):
 
   if verbose:
     show_img_with_bbox(sample_input, logits, id_to_class, 
-      test_batch_id, confidence_score=0.6, display_label=True)
+      test_batch_id, confidence_score=0.6, display_label=False)
 
   print(f"loss: {loss}, loss_xy: {loss_xy}, loss_wh: {loss_wh}, loss_conf: {loss_conf}, loss_class: {loss_class}")
 
 
 # show_img_with_bbox(sample_input, 
 #       logits, id_to_class, test_batch_id, confidence_score=0.05)
+
+# %%%
+
+# Example COCO:
+import struct
+class WeightReader:
+    def __init__(self, weight_file):
+        with open(weight_file, 'rb') as w_f:
+            major,    = struct.unpack('i', w_f.read(4))
+            minor,    = struct.unpack('i', w_f.read(4))
+            revision, = struct.unpack('i', w_f.read(4))
+
+            if (major*10 + minor) >= 2 and major < 1000 and minor < 1000:
+                w_f.read(8)
+            else:
+                w_f.read(4)
+
+            transpose = (major > 1000) or (minor > 1000)
+            
+            binary = w_f.read()
+
+        self.offset = 0
+        self.all_weights = np.frombuffer(binary, dtype='float32')
+        
+    def read_bytes(self, size):
+        self.offset = self.offset + size
+        return self.all_weights[self.offset-size:self.offset]
+
+    def load_weights(self, model):
+        for i in range(106):
+            try:
+                conv_layer = model.get_layer('conv_' + str(i))
+                print("loading weights of convolution #" + str(i))
+
+                if i not in [81, 93, 105]:
+                    norm_layer = model.get_layer('bnorm_' + str(i))
+
+                    size = np.prod(norm_layer.get_weights()[0].shape)
+
+                    beta  = self.read_bytes(size) # bias
+                    gamma = self.read_bytes(size) # scale
+                    mean  = self.read_bytes(size) # mean
+                    var   = self.read_bytes(size) # variance            
+
+                    weights = norm_layer.set_weights([gamma, beta, mean, var])  
+
+                if len(conv_layer.get_weights()) > 1:
+                    bias   = self.read_bytes(np.prod(conv_layer.get_weights()[1].shape))
+                    kernel = self.read_bytes(np.prod(conv_layer.get_weights()[0].shape))
+                    
+                    kernel = kernel.reshape(list(reversed(conv_layer.get_weights()[0].shape)))
+                    kernel = kernel.transpose([2,3,1,0])
+                    conv_layer.set_weights([kernel, bias])
+                else:
+                    kernel = self.read_bytes(np.prod(conv_layer.get_weights()[0].shape))
+                    kernel = kernel.reshape(list(reversed(conv_layer.get_weights()[0].shape)))
+                    kernel = kernel.transpose([2,3,1,0])
+                    conv_layer.set_weights([kernel])
+            except ValueError:
+                print("no convolution #" + str(i))     
+    
+    def reset(self):
+        self.offset = 0
+
+net_h, net_w = 416, 416
+obj_thresh, nms_thresh = 0.5, 0.45
+weights_path = "./yolov3.weights"
+anchors = [[116,90,  156,198,  373,326],  [30,61, 62,45,  59,119], [10,13,  16,30,  33,23]]
+
+labels = ["person", "bicycle", "car", "motorbike", "aeroplane", "bus", "train", "truck", \
+              "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", \
+              "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", \
+              "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", \
+              "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", \
+              "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", \
+              "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", \
+              "chair", "sofa", "pottedplant", "bed", "diningtable", "toilet", "tvmonitor", "laptop", "mouse", \
+              "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", \
+              "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"]
+
+# make the yolov3 model to predict 80 classes on COCO
+yolov3 = make_yolov3_model()
+
+# load the weights trained on COCO into the model
+weight_reader = WeightReader(weights_path)
+weight_reader.load_weights(yolov3)
+
+
+def do_nms(boxes, nms_thresh):
+    if len(boxes) > 0:
+        nb_class = len(boxes[0].classes)
+    else:
+        return
+        
+    for c in range(nb_class):
+        sorted_indices = np.argsort([-box.classes[c] for box in boxes])
+
+        for i in range(len(sorted_indices)):
+            index_i = sorted_indices[i]
+
+            if boxes[index_i].classes[c] == 0: continue
+
+            for j in range(i+1, len(sorted_indices)):
+                index_j = sorted_indices[j]
+
+                if bbox_iou(boxes[index_i], boxes[index_j]) >= nms_thresh:
+                    boxes[index_j].classes[c] = 0
+                    
+def draw_boxes(image, boxes, labels, obj_thresh):
+    for box in boxes:
+        label_str = ''
+        label = -1
+        
+        for i in range(len(labels)):
+            if box.classes[i] > obj_thresh:
+                label_str += labels[i]
+                label = i
+                print(labels[i] + ': ' + str(box.classes[i]*100) + '%')
+                
+        if label >= 0:
+            cv2.rectangle(image, (box.xmin,box.ymin), (box.xmax,box.ymax), (0,255,0), 3)
+            cv2.putText(image, 
+                        label_str + ' ' + str(box.get_score()), 
+                        (box.xmin, box.ymin - 13), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 
+                        1e-3 * image.shape[0], 
+                        (0,255,0), 2)
+        
+    return image      
+
+
+boxes = []
+
+for i in range(len(logits)):
+    # decode the output of the network
+    boxes += decode_netout(logits[i][0], anchors[i], obj_thresh, nms_thresh, net_h, net_w)
+
+# correct the sizes of the bounding boxes
+correct_yolo_boxes(boxes, net_h, net_w, net_h, net_w)
+
+# suppress non-maximal boxes
+do_nms(boxes, nms_thresh)
+
+
+# %%
+
+len(boxes)
+# %%
+
+boxes[346].ymax
+
+# %%
+
+a = logits[0][0]
+
+# %%
+
+len(logits)
+
 
 
 # %%

@@ -1,7 +1,7 @@
 import numpy as np
 
 
-BATCH_SIZE = 8
+BATCH_SIZE = 2
 
 image_size = (400, 400)
 
@@ -14,8 +14,8 @@ LAMBDA_NOOBJ = 0.5
 LAMBDA_OBJ = 5.0
 LAMBDA_CLASS = 1.0
 
-n_cell_y = 17
-n_cell_x = 17
+n_cell_y = 26
+n_cell_x = 26
 cell_width = 1.0 / n_cell_x
 cell_height = 1.0 / n_cell_y 
 anchor_size = [32, 64, 128]

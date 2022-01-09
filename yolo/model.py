@@ -2,6 +2,8 @@ from types import new_class
 import tensorflow as tf
 import tensorflow.keras.layers as L
 
+from .const import *
+
 # Write model
 class SimpleModel(tf.keras.Model):
   def __init__(self, input_shape, n_anchor_boxes, n_out) -> None:
@@ -337,7 +339,7 @@ def _conv_block(inp, convs, skip=True):
   return L.add([skip_connection, x]) if skip else x
 
 def make_yolov3_model():
-    input_image = L.Input(shape=(None, None, 3))
+    input_image = L.Input(shape=(*example_image_size, 3))
 
     # Layer  0 => 4
     x = _conv_block(input_image, [{'filter': 32, 'kernel': 3, 'stride': 1, 'bnorm': True, 'leaky': True, 'layer_idx': 0},
@@ -397,7 +399,7 @@ def make_yolov3_model():
 
     # Layer 80 => 82
     yolo_82 = _conv_block(x, [{'filter': 1024, 'kernel': 3, 'stride': 1, 'bnorm': True,  'leaky': True,  'layer_idx': 80},
-                              {'filter':  255, 'kernel': 1, 'stride': 1, 'bnorm': False, 'leaky': False, 'layer_idx': 81}], skip=False)
+                              {'filter':  86, 'kernel': 1, 'stride': 1, 'bnorm': False, 'leaky': False, 'layer_idx': 81}], skip=False)
 
     # Layer 83 => 86
     x = _conv_block(x, [{'filter': 256, 'kernel': 1, 'stride': 1, 'bnorm': True, 'leaky': True, 'layer_idx': 84}], skip=False)
@@ -413,7 +415,7 @@ def make_yolov3_model():
 
     # Layer 92 => 94
     yolo_94 = _conv_block(x, [{'filter': 512, 'kernel': 3, 'stride': 1, 'bnorm': True,  'leaky': True,  'layer_idx': 92},
-                              {'filter': 255, 'kernel': 1, 'stride': 1, 'bnorm': False, 'leaky': False, 'layer_idx': 93}], skip=False)
+                              {'filter': 86, 'kernel': 1, 'stride': 1, 'bnorm': False, 'leaky': False, 'layer_idx': 93}], skip=False)
 
     # Layer 95 => 98
     x = _conv_block(x, [{'filter': 128, 'kernel': 1, 'stride': 1, 'bnorm': True, 'leaky': True,   'layer_idx': 96}], skip=False)
@@ -427,7 +429,14 @@ def make_yolov3_model():
                                {'filter': 256, 'kernel': 3, 'stride': 1, 'bnorm': True,  'leaky': True,  'layer_idx': 102},
                                {'filter': 128, 'kernel': 1, 'stride': 1, 'bnorm': True,  'leaky': True,  'layer_idx': 103},
                                {'filter': 256, 'kernel': 3, 'stride': 1, 'bnorm': True,  'leaky': True,  'layer_idx': 104},
-                               {'filter': 255, 'kernel': 1, 'stride': 1, 'bnorm': False, 'leaky': False, 'layer_idx': 105}], skip=False)
+                               {'filter': 256, 'kernel': 1, 'stride': 1, 'bnorm': True, 'leaky': True, 'layer_idx': 105}], skip=False)
 
-    model = tf.keras.Model(input_image, [yolo_82, yolo_94, yolo_106])    
+    yolo_106 = L.MaxPool2D(2,2)(yolo_106)
+    yolo_106 = L.Conv2D(86, (3,3), padding="same")(yolo_106)
+
+    out = YoloHead()(yolo_106)
+
+
+    # model = tf.keras.Model(input_image, [yolo_82, yolo_94, yolo_106])  
+    model = tf.keras.Model(input_image, out)
     return model
