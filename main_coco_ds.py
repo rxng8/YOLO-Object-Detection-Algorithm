@@ -23,9 +23,11 @@ import cv2
 import tqdm
 
 from yolo.const import *
-from yolo.utils import draw_boxes, dynamic_iou, iou, show_img, preprocess_image
-from yolo.model import SimpleModel, SimpleModel2, SimpleYolo, SimpleYolo2, testSimpleYolo
-from yolo.loss import yolo_loss, simple_mse_loss
+from yolo.utils import draw_boxes, dynamic_iou, iou, show_img, preprocess_image, show_img_with_bbox
+from yolo.model import SimpleModel, \
+  SimpleModel2, SimpleYolo, SimpleYolo2, testSimpleYolo, \
+  SimpleYolo3, SimpleYolo4
+from yolo.loss import yolo_loss, simple_mse_loss, yolo_loss_2
 
 dataset_root = "./dataset/coco"
 train_annotation_path = os.path.join(dataset_root, "annotations", "instances_train2014.json")
@@ -34,8 +36,8 @@ train_image_folder = os.path.join(dataset_root, "train")
 test_image_folder = os.path.join(dataset_root, "val")
 
 data_pile_path = "./dataset/coco/pickle/dump.npy"
-training_history_path = "./training_history/history6.npy"
-model_weights_path = "./weights/checkpoint6"
+training_history_path = "./training_history/history7.npy"
+model_weights_path = "./weights/checkpoint7"
 
 # Data format
 # https://cocodataset.org/#format-data
@@ -152,7 +154,7 @@ def train_gen():
       original_img = np.asarray(Image.open(image_path))
       original_width = id_to_train_image_metadata[image_id]["width"]
       original_height = id_to_train_image_metadata[image_id]["height"]
-      preprocessed_img = preprocess_image(original_img)
+      preprocessed_img = preprocess_image(original_img, image_size=image_size)
       # show_img(preprocessed_img)
 
       label = np.zeros(
@@ -216,7 +218,7 @@ def test_gen():
       original_img = np.asarray(Image.open(image_path))
       original_width = id_to_test_image_metadata[image_id]["width"]
       original_height = id_to_test_image_metadata[image_id]["height"]
-      preprocessed_img = preprocess_image(original_img)
+      preprocessed_img = preprocess_image(original_img, image_size=image_size)
       label = np.zeros(
         shape=(n_cell_y, n_cell_x, n_class + 5),
         dtype=float
@@ -296,11 +298,7 @@ optimizer = tf.keras.optimizers.SGD(learning_rate=learning_rate)
 #   n_class=n_class
 # )
 
-# if os.path.exists(model_weights_path + ".index"):
-#   print("Model weights loaded!")
-#   model.load_weights(model_weights_path)
-
-model = SimpleYolo3((*image_size, n_channels), n_class + 5, n_class)
+model: tf.keras.Model = SimpleYolo4((*image_size, n_channels), n_class + 5, n_class)
 model.summary()
 with tf.device("/CPU:0"):
   test_logits = tf.random.normal((BATCH_SIZE, *image_size, n_channels), mean=0.5, stddev=0.3)
@@ -326,17 +324,31 @@ def train(model,
         training_batch_iter, 
         test_batch_iter, 
         optimizer, 
-        loss_function, 
-        history, 
+        loss_function,
         epochs=1, 
         steps_per_epoch=20, 
         valid_step=5,
         history_path=None,
         weights_path=None):
   
+  if not os.path.exists(training_history_path):
+    epochs_val_loss = np.array([])
+    epochs_loss = np.array([])
+    history = [epochs_loss, epochs_val_loss]
+  else:
+    with open(training_history_path, "rb") as f:
+      history = np.load(f, allow_pickle=True)
+
   epochs_loss, epochs_val_loss = history
   epochs_loss = epochs_loss.tolist()
   epochs_val_loss = epochs_val_loss.tolist()
+
+  if os.path.exists(model_weights_path + ".index"):
+    try:
+      model.load_weights(model_weights_path)
+      print("Model weights loaded!")
+    except:
+      print("Cannot load weights")
 
   # https://philipplies.medium.com/progress-bar-and-status-logging-in-python-with-tqdm-35ce29b908f5
   # outer_tqdm = tqdm(total=epochs, desc='Epoch', position=0)
@@ -381,7 +393,7 @@ def train(model,
           inner_tqdm.update(1)
 
     epochs_loss.append(losses)
-    epochs_val_loss.append(val_loss)
+    epochs_val_loss.append(val_losses)
 
     # Save history and model
     if history_path != None:
@@ -403,6 +415,14 @@ loop=1
 test_batch_id=0
 verbose=True
 
+# Load weights if needed:
+# if os.path.exists(model_weights_path + ".index"):
+#   try:
+#     model.load_weights(model_weights_path)
+#     print("Model weights loaded!")
+#   except:
+#     print("Cannot load weights")
+
 # Test yolo_loss_2
 for i in range(loop):
   sample = next(test_batch_iter)
@@ -412,21 +432,24 @@ for i in range(loop):
   if verbose:
     # show_img(sample_input[test_batch_id])
     show_img_with_bbox(sample_input, 
-      sample_output, test_batch_id, confidence_score=0.5)
+      sample_output, id_to_class, test_batch_id, confidence_score=0.5)
 
+  # Train
   logits, loss, [loss_xy, loss_wh, loss_conf, loss_class] = train_step(
               sample_input, sample_output, 
               model, yolo_loss_2, optimizer, debug=True)
+  
+  # logits = model(sample_input, training=True)
 
   if verbose:
-    show_img_with_bbox(sample_input, 
-      logits, test_batch_id, confidence_score=0.4)
+    show_img_with_bbox(sample_input, logits, id_to_class, 
+      test_batch_id, confidence_score=0.6, display_label=True)
 
   print(f"loss: {loss}, loss_xy: {loss_xy}, loss_wh: {loss_wh}, loss_conf: {loss_conf}, loss_class: {loss_class}")
 
 
 # show_img_with_bbox(sample_input, 
-#       logits, test_batch_id, confidence_score=0.4)
+#       logits, id_to_class, test_batch_id, confidence_score=0.05)
 
 
 # %%
@@ -443,15 +466,17 @@ sample = next(test_batch_iter)
 sample_x = sample["input"]
 sample_y_true = sample["output"]
 
-y_pred_list = debugging_model(sample_x, training=False)
+y_pred_list = debugging_model(sample_x, training=True)
+
+TEST_BATCH_ID = 0
+show_img_with_bbox(sample_x, 
+      y_pred_list[-1], id_to_class, TEST_BATCH_ID, confidence_score=0.7, display_label=True)
 
 # %%
 
-
-f, axarr = plt.subplots(4,8, figsize=(25,15))
-TEST_BATCH_ID = 0
+f, axarr = plt.subplots(7,8, figsize=(25,15))
 CONVOLUTION_NUMBER_LIST = [2, 4, 10, 15, 16, 17, 18, 19]
-LAYER_LIST = [0, 3, 6, 9]
+LAYER_LIST = [0, 3, 6, 9, 12, 14, 15]
 
 for x, CONVOLUTION_NUMBER in enumerate(CONVOLUTION_NUMBER_LIST):
   f1 = y_pred_list[LAYER_LIST[0]]
@@ -469,6 +494,18 @@ for x, CONVOLUTION_NUMBER in enumerate(CONVOLUTION_NUMBER_LIST):
   f4 = y_pred_list[LAYER_LIST[3]]
   axarr[3,x].imshow(f4[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
   axarr[3,x].grid(False)
+
+  f5 = y_pred_list[LAYER_LIST[4]]
+  axarr[4,x].imshow(f5[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
+  axarr[4,x].grid(False)
+
+  f6 = y_pred_list[LAYER_LIST[5]]
+  axarr[5,x].imshow(f6[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
+  axarr[5,x].grid(False)
+
+  f7 = y_pred_list[LAYER_LIST[6]]
+  axarr[6,x].imshow(f7[TEST_BATCH_ID, ..., 85])
+  axarr[6,x].grid(False)
   
   
 axarr[0,0].set_ylabel("After convolution layer 1")
@@ -489,14 +526,6 @@ plt.show()
 
 ########### TRAINING #############
 
-if not os.path.exists(training_history_path):
-  epochs_val_loss = np.array([])
-  epochs_loss = np.array([])
-  history = [epochs_loss, epochs_val_loss]
-else:
-  with open(training_history_path, "rb") as f:
-    history = np.load(f, allow_pickle=True)
-
 # About 50 epochs with each epoch step 100 will cover the whole training dataset!
 history = train(
   model,
@@ -504,9 +533,8 @@ history = train(
   test_batch_iter,
   optimizer,
   yolo_loss_2,
-  history,
   epochs=2,
-  steps_per_epoch=5000, # 82783 // 16
+  steps_per_epoch=500, # 82783 // 16
   history_path=training_history_path,
   weights_path=model_weights_path
 )
@@ -594,28 +622,29 @@ classes
 
 # %%
 
-
-[epochs_loss, epochs_val_loss] = history
-len(epochs_loss[0])
-epochs_loss[0][0]
-
-
-# %%
-
 # Plot
 with open(training_history_path, "rb") as f:
   [epochs_loss, epochs_val_loss] = np.load(f, allow_pickle=True)
 
-# %%
+flatten_epochs_loss = []
+for i, epoch in enumerate(epochs_loss):
+  for j, step in enumerate(epoch):
+    loss, [loss_xy, loss_wh, loss_conf, loss_class] = step
+    flatten_epochs_loss.append(loss)
 
-e_loss = [k[0] for k in epochs_loss]
 
-plt.plot(np.arange(1,len(e_loss)+ 1), e_loss)
-plt.show()
+flatten_epochs_val_loss = []
+for i, epoch in enumerate(epochs_val_loss):
+  # print(epoch)
+  for j, step in enumerate(epoch):
+    loss, [loss_xy, loss_wh, loss_conf, loss_class] = step
+    flatten_epochs_val_loss.append(loss)
 
-# %%%
+# compute step
+val_step = len(flatten_epochs_loss) // len(flatten_epochs_val_loss)
 
-plt.plot(np.arange(1,len(epochs_val_loss)+ 1), epochs_val_loss)
+plt.plot(np.arange(1,len(flatten_epochs_loss) + 1), flatten_epochs_loss)
+plt.plot(np.arange(1,len(flatten_epochs_loss) + 1, val_step), flatten_epochs_val_loss)
 plt.show()
 
 # %%%5

@@ -104,9 +104,18 @@ def yolo_loss_2(y_true, y_pred):
   nb_conf_box  = tf.reduce_sum(tf.cast(conf_mask  > 0.0, dtype=tf.float32))
   nb_class_box = tf.reduce_sum(tf.cast(class_mask > 0.0, dtype=tf.float32))
 
+  # Loss xy
   loss_xy = tf.reduce_sum(tf.square(true_box_xy - pred_box_xy) * coord_mask) / (nb_coord_box + EPSILON) / 2. # divide by two cuz that's the mse
-  loss_wh = tf.reduce_sum(tf.square(true_box_wh - pred_box_wh) * coord_mask) / (nb_coord_box + EPSILON) / 2. # divide by two cuz that's the mse
+  
+  # Loss wh
+  true_sqrt_box_wh = tf.sign(true_box_wh) * tf.sqrt(tf.abs(true_box_wh) + EPSILON)
+  pred_sqrt_box_wh = tf.sign(pred_box_wh) * tf.sqrt(tf.abs(pred_box_wh) + EPSILON)
+  loss_wh = tf.reduce_sum(tf.square(true_sqrt_box_wh - pred_sqrt_box_wh) * coord_mask) / (nb_coord_box + EPSILON) / 2. # divide by two cuz that's the mse
+  
+  # Loss conf
   loss_conf = tf.reduce_sum(tf.square(true_box_conf - pred_box_conf) * conf_mask) / (nb_conf_box + EPSILON) / 2.
+  
+  # Loss class
   loss_class = tf.reduce_sum(
     tf.nn.softmax_cross_entropy_with_logits(true_box_class, pred_box_class, axis=-1) * class_mask
   ) / nb_class_box

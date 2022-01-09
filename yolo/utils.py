@@ -246,9 +246,11 @@ def draw_boxes_2(img,
 
 
 def show_img_with_bbox(sample_input, 
-    sample_output, 
+    sample_output,
+    id_to_class: Dict[int, str],
     sample_batch_id=0, 
-    confidence_score=0.5):
+    confidence_score=0.5,
+    display_label=True):
   
   cell_list = []
 
@@ -260,10 +262,10 @@ def show_img_with_bbox(sample_input,
   for yth_cell in range(sample_output[sample_batch_id].shape[0]):
     for xth_cell in range(sample_output[sample_batch_id].shape[1]):
       # Draw all boxes with confidence > 0.5
-      cell_center_x = sample_output[sample_batch_id][yth_cell, xth_cell, n_class + 0] # range [0, 1]
-      cell_center_y = sample_output[sample_batch_id][yth_cell, xth_cell, n_class + 1] # range [0, 1]
-      cell_bbox_width = sample_output[sample_batch_id][yth_cell, xth_cell, n_class + 2] # range [0, 1]
-      cell_bbox_height = sample_output[sample_batch_id][yth_cell, xth_cell, n_class + 3] # range [0, 1]
+      cell_center_x = sample_output[sample_batch_id][yth_cell, xth_cell, -5] # range [0, 1]
+      cell_center_y = sample_output[sample_batch_id][yth_cell, xth_cell, -4] # range [0, 1]
+      cell_bbox_width = sample_output[sample_batch_id][yth_cell, xth_cell, -3] # range [0, ~]
+      cell_bbox_height = sample_output[sample_batch_id][yth_cell, xth_cell, -2] # range [0, ~]
       
       # Draw out!
       center_x = (cell_center_x + xth_cell) / n_cell_x
@@ -275,20 +277,20 @@ def show_img_with_bbox(sample_input,
       resized_xmax = center_x + bbox_width / 2.0
       resized_ymin = center_y - bbox_height / 2.0
       resized_ymax = center_y + bbox_height / 2.0
-      confidence = sample_output[sample_batch_id][yth_cell, xth_cell, n_class + 4]
+      confidence = sample_output[sample_batch_id][yth_cell, xth_cell, -1]
       
       if confidence > confidence_score:
         cell_list.append((yth_cell, xth_cell))
         # print(f"Labeled class: {id_to_class[max_class_id]}")
         # print(f"Confidence score: {confidence}")
         # Show the img with bounding boxes for the resized img
-        pred_classes = sample_output[sample_batch_id][yth_cell, xth_cell, 0:n_class]
+        pred_classes = sample_output[sample_batch_id][yth_cell, xth_cell, :-5]
         max_class_id = int(tf.argmax(pred_classes).numpy())
 
         boxes_list.append([resized_xmin, resized_ymin, bbox_width, bbox_height])
         display_str_lists.append([f"{id_to_class[max_class_id]}"])
   
   boxed_img = sample_img.numpy()
-  boxed_img = draw_boxes_2(boxed_img, boxes_list, display_str_lists=display_str_lists)
+  boxed_img = draw_boxes_2(boxed_img, boxes_list, display_str_lists=display_str_lists if display_label else ())
   show_img(boxed_img)
 
