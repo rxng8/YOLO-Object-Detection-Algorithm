@@ -25,7 +25,7 @@ conda create -n tf
 conda activate tf
 pip install -r requirements.txt
 ```
-* Next, go into one
+* Next, go into one python file `main_card_ds.py` or `main_coco_ds.py` and experiment with the VS Code notebook.
 
 ## Reference:
 ```
