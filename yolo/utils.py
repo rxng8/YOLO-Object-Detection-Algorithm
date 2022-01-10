@@ -52,7 +52,7 @@ def dynamic_iou(A, B):
 
   union_areas = A_areas + B_areas - intersect_areas
 
-  ious = tf.truediv(intersect_areas + EPSILON, union_areas + EPSILON)
+  ious = tf.truediv(intersect_areas, union_areas + EPSILON)
 
   return ious # (batch_size, n_cell_y, n_cell_x)
 
@@ -242,6 +242,9 @@ def draw_boxes_2(img,
   returned_image = np.zeros(current_img.shape, dtype="uint8")
   np.copyto(returned_image, np.array(PIL_image))
 
+  returned_image = returned_image.astype(float)
+  returned_image /= 255.0
+
   return returned_image
 
 
@@ -250,11 +253,14 @@ def show_img_with_bbox(sample_input,
     id_to_class: Dict[int, str],
     sample_batch_id=0, 
     confidence_score=0.5,
-    display_label=True):
+    display_label=True,
+    display_cell=False):
   
   cell_list = []
 
   boxes_list = []
+  boxes_cell_list = []
+
   display_str_lists = []
 
   sample_img = sample_input[sample_batch_id]
@@ -289,8 +295,18 @@ def show_img_with_bbox(sample_input,
 
         boxes_list.append([resized_xmin, resized_ymin, bbox_width, bbox_height])
         display_str_lists.append([f"{id_to_class[max_class_id]}"])
-  
+
+      if display_cell:
+        boxes_cell_list.append([xth_cell/float(n_cell_x), 
+          yth_cell/float(n_cell_y), 1/float(n_cell_x), 1/float(n_cell_y)])
+
   boxed_img = sample_img.numpy()
+  
+  if display_cell:
+    boxed_img = draw_boxes_2(boxed_img, boxes_cell_list, color="green", display_str_lists=())
+
   boxed_img = draw_boxes_2(boxed_img, boxes_list, display_str_lists=display_str_lists if display_label else ())
+  
+
   show_img(boxed_img)
 

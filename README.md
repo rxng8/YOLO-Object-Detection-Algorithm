@@ -39,3 +39,5 @@ number={},
 pages={779-788},
 doi={10.1109/CVPR.2016.91}}
 ```
+
+* https://jonathan-hui.medium.com/real-time-object-detection-with-yolo-yolov2-28b1b93e2088

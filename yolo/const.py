@@ -1,7 +1,7 @@
 import numpy as np
 
 
-BATCH_SIZE = 2
+BATCH_SIZE = 4
 
 image_size = (400, 400)
 
@@ -9,10 +9,11 @@ example_image_size = (416, 416)
 
 n_channels = 3
 learning_rate = 1e-4
-LAMBDA_COORD = 1.0
-LAMBDA_NOOBJ = 0.5
-LAMBDA_OBJ = 5.0
+LAMBDA_COORD = 10.0
+LAMBDA_NOOBJ = 0.1
+LAMBDA_OBJ = 50.0
 LAMBDA_CLASS = 1.0
+LAMBDA_WH = 1.0
 
 n_cell_y = 26
 n_cell_x = 26

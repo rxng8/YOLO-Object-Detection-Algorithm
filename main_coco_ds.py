@@ -36,8 +36,8 @@ train_image_folder = os.path.join(dataset_root, "train")
 test_image_folder = os.path.join(dataset_root, "val")
 
 data_pile_path = "./dataset/coco/pickle/dump.npy"
-training_history_path = "./training_history/history8.npy"
-model_weights_path = "./weights/checkpoint8"
+training_history_path = "./training_history/history9.npy"
+model_weights_path = "./weights/checkpoint9"
 
 # Data format
 # https://cocodataset.org/#format-data
@@ -408,10 +408,96 @@ def train(model,
   # return history
   return [epochs_loss, epochs_val_loss]
 
-
 # %%
 
+
 # Debug training
+
+def yolo_loss_3(y_true, y_pred):
+  # reference: https://mlblr.com/includes/mlai/index.html#yolov2
+  # reference: https://blog.emmanuelcaradec.com/humble-yolo-implementation-in-keras/
+  # (batch_size, n_box_y, n_box_x, n_anchor, n_out)
+  
+  mask_shape = tf.shape(y_true)[:-1]
+
+  pred_box_xy = y_pred[..., -5:-3]
+  pred_box_wh = y_pred[..., -3:-1] # Adjust prediction
+  pred_box_conf = y_pred[..., -1]
+  pred_box_class = y_pred[..., :-5]
+
+  true_box_xy = y_true[..., -5:-3]
+  true_box_wh = y_true[..., -3:-1]
+  true_box_conf = y_true[..., -1] # Shape (batch, 20, 20)
+  true_box_class = y_true[..., :-5]
+
+  # The 1_ij of the object (the ground truth of the resonsible box)
+  coord_mask = y_true[..., -1] == 1.0 # Shape (batch, 20, 20, 1)
+
+  # conf_mask
+  conf_object_mask = y_true[..., -1] == 1.0
+
+  # conf_mask
+  conf_no_object_mask = y_true[..., -1] == 0.0 
+
+  # class mask
+  class_mask = y_true[..., -1] == 1.0 # Shape (batch, 20, 20)
+
+  # Adjust the label confidence by multiplying the labeled confidence with the actual iou after predicted
+  ious = dynamic_iou(y_true[..., -5:-1], y_pred[..., -5:-1]) # Shape (batch, 20, 20)
+  true_box_conf = true_box_conf * ious # Shape (batch, 20, 20) x (batch, 20, 20) = (batch, 20, 20)
+
+  # conf mask
+  conf_low_conf_mask = ious < CONFIDENCE_THHRESHOLD
+  conf_noobj_mask = tf.logical_and(conf_no_object_mask, conf_low_conf_mask)
+
+  # Finalize the loss
+
+  # compute the number of position that we are actually backpropagating
+  nb_coord_box = tf.reduce_sum(tf.cast(coord_mask, dtype=tf.float32))
+  nb_conf_box  = tf.reduce_sum(tf.cast(tf.logical_or(conf_object_mask, conf_noobj_mask), dtype=tf.float32))
+  nb_class_box = tf.reduce_sum(tf.cast(class_mask, dtype=tf.float32))
+
+  # Loss xy
+  loss_xy = tf.reduce_sum(
+    tf.square(
+      true_box_xy[coord_mask] - pred_box_xy[coord_mask]
+    ) * LAMBDA_COORD
+  ) / (nb_coord_box + EPSILON) / 2. # divide by two cuz that's the mse
+  
+  # Loss wh
+  true_sqrt_box_wh = tf.sign(true_box_wh) * tf.sqrt(tf.abs(true_box_wh) + EPSILON)
+  pred_sqrt_box_wh = tf.sign(pred_box_wh) * tf.sqrt(tf.abs(pred_box_wh) + EPSILON)
+  loss_wh = tf.reduce_sum(
+    tf.square(
+      true_sqrt_box_wh[coord_mask] - pred_sqrt_box_wh[coord_mask]
+    ) * LAMBDA_WH
+  ) / (nb_coord_box + EPSILON) / 2. # divide by two cuz that's the mse
+  
+  # Loss conf
+  loss_conf_obj = tf.reduce_sum(
+    tf.square(
+      true_box_conf[conf_object_mask] - pred_box_conf[conf_object_mask]
+    ) * LAMBDA_OBJ
+  ) / (nb_conf_box + EPSILON) / 2.
+
+  loss_conf_noobj = tf.reduce_sum(
+    tf.square(
+      true_box_conf[conf_noobj_mask] - pred_box_conf[conf_noobj_mask]
+    ) * LAMBDA_NOOBJ
+  ) / (nb_conf_box + EPSILON) / 2.
+  
+  loss_conf = loss_conf_obj + loss_conf_noobj
+
+  # Loss class
+  loss_class = tf.reduce_sum(
+    tf.nn.softmax_cross_entropy_with_logits(
+      true_box_class[class_mask], pred_box_class[class_mask], axis=-1
+    ) * LAMBDA_CLASS
+  ) / nb_class_box
+
+  loss = loss_xy + loss_wh + loss_conf + loss_class
+  return loss, [loss_xy, loss_wh, loss_conf, loss_class]
+
 loop=1
 test_batch_id=0
 verbose=True
@@ -432,25 +518,109 @@ for i in range(loop):
   # print(f" Sample_true shape: {sample["output"].shape}")
   if verbose:
     # show_img(sample_input[test_batch_id])
-    show_img_with_bbox(sample_input, 
-      sample_output, id_to_class, test_batch_id, confidence_score=0.5)
+    show_img_with_bbox(sample_input, sample_output, id_to_class, 
+      test_batch_id, confidence_score=0.5, display_cell=True)
 
   # Train
   logits, loss, [loss_xy, loss_wh, loss_conf, loss_class] = train_step(
               sample_input, sample_output, 
-              model, yolo_loss_2, optimizer, debug=True)
+              model, yolo_loss_3, optimizer, debug=True)
   
   # logits = model(sample_input, training=True)
 
   if verbose:
     show_img_with_bbox(sample_input, logits, id_to_class, 
-      test_batch_id, confidence_score=0.6, display_label=False)
+      test_batch_id, confidence_score=0.4, display_label=True, display_cell=False)
 
   print(f"loss: {loss}, loss_xy: {loss_xy}, loss_wh: {loss_wh}, loss_conf: {loss_conf}, loss_class: {loss_class}")
 
+# %%
 
-# show_img_with_bbox(sample_input, 
-#       logits, id_to_class, test_batch_id, confidence_score=0.05)
+show_img_with_bbox(sample_input, logits, id_to_class, 
+      test_batch_id, confidence_score=0.45, display_label=True, display_cell=True)
+
+# %%
+
+y_true, y_pred = sample_output, model(sample_input, training=True)
+mask_shape = tf.shape(y_true)[:-1]
+
+pred_box_xy = y_pred[..., -5:-3]
+pred_box_wh = y_pred[..., -3:-1] # Adjust prediction
+pred_box_conf = y_pred[..., -1]
+pred_box_class = y_pred[..., :-5]
+
+true_box_xy = y_true[..., -5:-3]
+true_box_wh = y_true[..., -3:-1]
+true_box_conf = y_true[..., -1] # Shape (batch, 20, 20)
+true_box_class = y_true[..., :-5]
+
+# The 1_ij of the object (the ground truth of the resonsible box)
+coord_mask = y_true[..., -1] == 1.0 # Shape (batch, 20, 20, 1)
+
+# conf_mask
+conf_object_mask = y_true[..., -1] == 1.0
+
+# conf_mask
+conf_no_object_mask = y_true[..., -1] == 0.0 
+
+# class mask
+class_mask = y_true[..., -1] == 1.0 # Shape (batch, 20, 20)
+
+# Adjust the label confidence by multiplying the labeled confidence with the actual iou after predicted
+ious = dynamic_iou(y_true[..., -5:-1], y_pred[..., -5:-1]) # Shape (batch, 20, 20)
+true_box_conf = true_box_conf * ious # Shape (batch, 20, 20) x (batch, 20, 20) = (batch, 20, 20)
+
+# conf mask
+conf_low_conf_mask = ious < CONFIDENCE_THHRESHOLD
+conf_noobj_mask = tf.logical_and(conf_no_object_mask, conf_low_conf_mask)
+
+# Finalize the loss
+
+# compute the number of position that we are actually backpropagating
+nb_coord_box = tf.reduce_sum(tf.cast(coord_mask, dtype=tf.float32))
+nb_conf_box  = tf.reduce_sum(tf.cast(tf.logical_or(conf_object_mask, conf_noobj_mask), dtype=tf.float32))
+nb_class_box = tf.reduce_sum(tf.cast(class_mask, dtype=tf.float32))
+
+# Loss xy
+loss_xy = tf.reduce_sum(
+  tf.square(
+    true_box_xy[coord_mask] - pred_box_xy[coord_mask]
+  ) * LAMBDA_COORD
+) / (nb_coord_box + EPSILON) / 2. # divide by two cuz that's the mse
+
+# Loss wh
+true_sqrt_box_wh = tf.sign(true_box_wh) * tf.sqrt(tf.abs(true_box_wh) + EPSILON)
+pred_sqrt_box_wh = tf.sign(pred_box_wh) * tf.sqrt(tf.abs(pred_box_wh) + EPSILON)
+loss_wh = tf.reduce_sum(
+  tf.square(
+    true_sqrt_box_wh[coord_mask] - pred_sqrt_box_wh[coord_mask]
+  ) * LAMBDA_WH
+) / (nb_coord_box + EPSILON) / 2. # divide by two cuz that's the mse
+
+# Loss conf
+loss_conf_obj = tf.reduce_sum(
+  tf.square(
+    true_box_conf[conf_object_mask] - pred_box_conf[conf_object_mask]
+  ) * LAMBDA_OBJ
+) / (nb_conf_box + EPSILON) / 2.
+
+loss_conf_noobj = tf.reduce_sum(
+  tf.square(
+    true_box_conf[conf_noobj_mask] - pred_box_conf[conf_noobj_mask]
+  ) * LAMBDA_NOOBJ
+) / (nb_conf_box + EPSILON) / 2.
+
+loss_conf = loss_conf_obj + loss_conf_noobj
+
+# Loss class
+loss_class = tf.reduce_sum(
+  tf.nn.softmax_cross_entropy_with_logits(
+    true_box_class[class_mask], pred_box_class[class_mask], axis=-1
+  ) * LAMBDA_CLASS
+) / nb_class_box
+
+loss = loss_xy + loss_wh + loss_conf + loss_class
+
 
 # %%%
 
@@ -618,6 +788,8 @@ len(logits)
 
 layer_list = [l for l in model.layers]
 debugging_model = tf.keras.Model(model.inputs, [l.output for l in layer_list])
+
+print(len(layer_list))
 layer_list
 
 # %%
@@ -630,44 +802,82 @@ y_pred_list = debugging_model(sample_x, training=True)
 
 TEST_BATCH_ID = 0
 show_img_with_bbox(sample_x, 
-      y_pred_list[-1], id_to_class, TEST_BATCH_ID, confidence_score=0.7, display_label=True)
+      y_pred_list[-1], id_to_class, TEST_BATCH_ID, confidence_score=0.5, display_label=True)
 
 # %%
 
-f, axarr = plt.subplots(7,8, figsize=(25,15))
-CONVOLUTION_NUMBER_LIST = [2, 4, 10, 15, 16, 17, 18, 19]
-LAYER_LIST = [0, 3, 6, 9, 12, 14, 15]
+f, axarr = plt.subplots(9,12, figsize=(25,15))
+CONVOLUTION_NUMBER_LIST = [2, 4, 10, 15, 24, 28, 32, 36, 44, 54, 76, 85]
+LAYER_LIST = [2, 35, 64, 85, 122, 145, 194, 247, 248]
 
 for x, CONVOLUTION_NUMBER in enumerate(CONVOLUTION_NUMBER_LIST):
-  f1 = y_pred_list[LAYER_LIST[0]]
-  axarr[0,x].imshow(f1[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
-  axarr[0,x].grid(False)
+  try:
+    f1 = y_pred_list[LAYER_LIST[0]]
+    axarr[0,x].imshow(f1[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
+    axarr[0,x].grid(False)
+  except:
+    pass
 
-  f2 = y_pred_list[LAYER_LIST[1]]
-  axarr[1,x].imshow(f2[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
-  axarr[1,x].grid(False)
+  try:
+    f2 = y_pred_list[LAYER_LIST[1]]
+    axarr[1,x].imshow(f2[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
+    axarr[1,x].grid(False)
+  except:
+    pass
 
-  f3 = y_pred_list[LAYER_LIST[2]]
-  axarr[2,x].imshow(f3[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
-  axarr[2,x].grid(False)
+  try:
+    f3 = y_pred_list[LAYER_LIST[2]]
+    axarr[2,x].imshow(f3[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
+    axarr[2,x].grid(False)
+  except:
+    pass
 
-  f4 = y_pred_list[LAYER_LIST[3]]
-  axarr[3,x].imshow(f4[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
-  axarr[3,x].grid(False)
+  try:
+    f4 = y_pred_list[LAYER_LIST[3]]
+    axarr[3,x].imshow(f4[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
+    axarr[3,x].grid(False)
+  except:
+    pass
 
-  f5 = y_pred_list[LAYER_LIST[4]]
-  axarr[4,x].imshow(f5[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
-  axarr[4,x].grid(False)
+  try:
+    f5 = y_pred_list[LAYER_LIST[4]]
+    axarr[4,x].imshow(f5[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
+    axarr[4,x].grid(False)
+  except:
+    pass
 
-  f6 = y_pred_list[LAYER_LIST[5]]
-  axarr[5,x].imshow(f6[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
-  axarr[5,x].grid(False)
+  try:
+    f6 = y_pred_list[LAYER_LIST[5]]
+    axarr[5,x].imshow(f6[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
+    axarr[5,x].grid(False)
+  except:
+    pass
 
-  f7 = y_pred_list[LAYER_LIST[6]]
-  axarr[6,x].imshow(f7[TEST_BATCH_ID, ..., 85])
-  axarr[6,x].grid(False)
+  # f7 = y_pred_list[LAYER_LIST[6]]
+  # axarr[6,x].imshow(f7[TEST_BATCH_ID, ..., 85])
+  # axarr[6,x].grid(False)
   
-  
+  try:
+    f7 = y_pred_list[LAYER_LIST[6]]
+    axarr[6,x].imshow(f7[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
+    axarr[6,x].grid(False)
+  except:
+    pass
+
+  try:
+    f8 = y_pred_list[LAYER_LIST[7]]
+    axarr[7,x].imshow(f8[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
+    axarr[7,x].grid(False)
+  except:
+    pass
+
+  try:
+    f9 = y_pred_list[LAYER_LIST[8]]
+    axarr[8,x].imshow(f9[TEST_BATCH_ID, ..., CONVOLUTION_NUMBER])
+    axarr[8,x].grid(False)
+  except:
+    pass
+
 axarr[0,0].set_ylabel("After convolution layer 1")
 axarr[1,0].set_ylabel("After convolution layer 2")
 axarr[2,0].set_ylabel("After convolution layer 3")
@@ -692,9 +902,9 @@ history = train(
   train_batch_iter,
   test_batch_iter,
   optimizer,
-  yolo_loss_2,
+  yolo_loss_3,
   epochs=2,
-  steps_per_epoch=500, # 82783 // 16
+  steps_per_epoch=20000, # 82783 // 4
   history_path=training_history_path,
   weights_path=model_weights_path
 )
@@ -966,6 +1176,24 @@ loss_conf = tf.square(label_conf * identity_obj - sample_pred[..., -1] * identit
 # element wise addition
 loss = (loss_xy + loss_wh + loss_class + loss_conf)
 
+
+
+# %%%
+
+
+a = tf.random.normal((2, 3, 3, 6)) # (batch, size_x, size_y, vector)
+b = np.zeros((2,3,3,6))
+b[1, 2, 2, 5] = 1
+b[0, 1, 0, 5] = 1
+mask = b[..., -1] > 0.5
+
+# %%
+
+mask
+
+# %%
+
+a[mask]
 
 
 
