@@ -16,6 +16,9 @@
   * `utils.py`: Utillities methods.
 * `main_card_ds.py`: This is the jupyter notebook (vscode format) to train the YOLO v1 algorithm on the solitare card detection dataset.
 * `main_coco_ds.py`: This is the jupyter notebook (vscode format) to train the YOLO v1 algorithm on the coco object detection dataset.
+* `weights`: contains the weights file
+  * `checkpoint9`: The yolo v3 model with customization. Train for 2 epochs and 20000 step each epoch, with batch size 4.
+  * `checkpoint10`: The yolo v3 model with customization. Train for 4 epochs and 20000 step each epoch, with batch size 4.
 
 ## Run the training process:
 

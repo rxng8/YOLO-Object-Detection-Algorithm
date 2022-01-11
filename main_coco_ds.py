@@ -37,7 +37,7 @@ test_image_folder = os.path.join(dataset_root, "val")
 
 data_pile_path = "./dataset/coco/pickle/dump.npy"
 training_history_path = "./training_history/history9.npy"
-model_weights_path = "./weights/checkpoint9"
+model_weights_path = "./weights/checkpoint10"
 
 # Data format
 # https://cocodataset.org/#format-data
