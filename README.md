@@ -30,6 +30,10 @@ pip install -r requirements.txt
 ```
 * Next, go into one python file `main_card_ds.py` or `main_coco_ds.py` and experiment with the VS Code notebook.
 
+## Example:
+* Here is the intermediary outputs in the convolution layers:
+  ![./docs/intermediary.png](./docs/intermediary.png)
+
 ## Reference:
 ```
 @INPROCEEDINGS{7780460,
