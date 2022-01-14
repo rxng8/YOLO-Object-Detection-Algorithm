@@ -32,8 +32,8 @@ from yolo.loss import yolo_loss, simple_mse_loss, yolo_loss_2, yolo_loss_3
 dataset_root = "./dataset/coco"
 train_annotation_path = os.path.join(dataset_root, "annotations", "instances_train2014.json")
 test_annotation_path = os.path.join(dataset_root, "annotations", "instances_val2014.json")
-train_image_folder = os.path.join(dataset_root, "train")
-test_image_folder = os.path.join(dataset_root, "val")
+train_image_folder = os.path.join(dataset_root, "train/train2014")
+test_image_folder = os.path.join(dataset_root, "val/val2014")
 
 data_pile_path = "./dataset/coco/pickle/dump.npy"
 training_history_path = "./training_history/history9.npy"

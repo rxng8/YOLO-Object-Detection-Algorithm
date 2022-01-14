@@ -16,6 +16,7 @@
   * `utils.py`: Utillities methods.
 * `main_card_ds.py`: This is the jupyter notebook (vscode format) to train the YOLO v1 algorithm on the solitare card detection dataset.
 * `main_coco_ds.py`: This is the jupyter notebook (vscode format) to train the YOLO v1 algorithm on the coco object detection dataset.
+* `main_coco_ds.ipynb`: This is the jupyter notebook to train the YOLO v1 algorithm on the coco object detection dataset **on Google Colab (Training elsewhere will not work as expected)**.
 * `weights`: contains the weights file
   * `checkpoint9`: The yolo v3 model with customization. Train for 2 epochs and 20000 step each epoch, with batch size 4.
   * `checkpoint10`: The yolo v3 model with customization. Train for 4 epochs and 20000 step each epoch, with batch size 4.
@@ -29,6 +30,8 @@ conda activate tf
 pip install -r requirements.txt
 ```
 * Next, go into one python file `main_card_ds.py` or `main_coco_ds.py` and experiment with the VS Code notebook.
+
+* Alternatively, you can go to this colab notebook to see the training pipeline: [https://colab.research.google.com/drive/1YamrFLBJ1K7Dmy7L3f7hLp0LeNaBFL4Y?usp=sharing](https://colab.research.google.com/drive/1YamrFLBJ1K7Dmy7L3f7hLp0LeNaBFL4Y?usp=sharing). Remember to change the runtime type to GPU if you want to run the whole pipeline
 
 ## Example:
 * Here is the intermediary outputs in the convolution layers:
