@@ -11,7 +11,7 @@ import pickle
 import tensorflow as tf
 print(f"Tensorflow version: {tf.__version__}")
 print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
-import tensorflow.keras.layers as L
+import tensorflow.keras.layers as layers
 import numpy as np
 import pandas as pd
 from PIL import ImageDraw, ImageFont, Image
@@ -27,7 +27,7 @@ from yolo.utils import draw_boxes, dynamic_iou, iou, show_img, preprocess_image,
 from yolo.model import SimpleModel, \
   SimpleModel2, SimpleYolo, SimpleYolo2, testSimpleYolo, \
   SimpleYolo3, SimpleYolo4, make_yolov3_model
-from yolo.loss import yolo_loss, simple_mse_loss, yolo_loss_2
+from yolo.loss import yolo_loss, simple_mse_loss, yolo_loss_2, yolo_loss_3
 
 dataset_root = "./dataset/coco"
 train_annotation_path = os.path.join(dataset_root, "annotations", "instances_train2014.json")
@@ -413,91 +413,6 @@ def train(model,
 
 # Debug training
 
-def yolo_loss_3(y_true, y_pred):
-  # reference: https://mlblr.com/includes/mlai/index.html#yolov2
-  # reference: https://blog.emmanuelcaradec.com/humble-yolo-implementation-in-keras/
-  # (batch_size, n_box_y, n_box_x, n_anchor, n_out)
-  
-  mask_shape = tf.shape(y_true)[:-1]
-
-  pred_box_xy = y_pred[..., -5:-3]
-  pred_box_wh = y_pred[..., -3:-1] # Adjust prediction
-  pred_box_conf = y_pred[..., -1]
-  pred_box_class = y_pred[..., :-5]
-
-  true_box_xy = y_true[..., -5:-3]
-  true_box_wh = y_true[..., -3:-1]
-  true_box_conf = y_true[..., -1] # Shape (batch, 20, 20)
-  true_box_class = y_true[..., :-5]
-
-  # The 1_ij of the object (the ground truth of the resonsible box)
-  coord_mask = y_true[..., -1] == 1.0 # Shape (batch, 20, 20, 1)
-
-  # conf_mask
-  conf_object_mask = y_true[..., -1] == 1.0
-
-  # conf_mask
-  conf_no_object_mask = y_true[..., -1] == 0.0 
-
-  # class mask
-  class_mask = y_true[..., -1] == 1.0 # Shape (batch, 20, 20)
-
-  # Adjust the label confidence by multiplying the labeled confidence with the actual iou after predicted
-  ious = dynamic_iou(y_true[..., -5:-1], y_pred[..., -5:-1]) # Shape (batch, 20, 20)
-  true_box_conf = true_box_conf * ious # Shape (batch, 20, 20) x (batch, 20, 20) = (batch, 20, 20)
-
-  # conf mask
-  conf_low_conf_mask = ious < CONFIDENCE_THHRESHOLD
-  conf_noobj_mask = tf.logical_and(conf_no_object_mask, conf_low_conf_mask)
-
-  # Finalize the loss
-
-  # compute the number of position that we are actually backpropagating
-  nb_coord_box = tf.reduce_sum(tf.cast(coord_mask, dtype=tf.float32))
-  nb_conf_box  = tf.reduce_sum(tf.cast(tf.logical_or(conf_object_mask, conf_noobj_mask), dtype=tf.float32))
-  nb_class_box = tf.reduce_sum(tf.cast(class_mask, dtype=tf.float32))
-
-  # Loss xy
-  loss_xy = tf.reduce_sum(
-    tf.square(
-      true_box_xy[coord_mask] - pred_box_xy[coord_mask]
-    ) * LAMBDA_COORD
-  ) / (nb_coord_box + EPSILON) / 2. # divide by two cuz that's the mse
-  
-  # Loss wh
-  true_sqrt_box_wh = tf.sign(true_box_wh) * tf.sqrt(tf.abs(true_box_wh) + EPSILON)
-  pred_sqrt_box_wh = tf.sign(pred_box_wh) * tf.sqrt(tf.abs(pred_box_wh) + EPSILON)
-  loss_wh = tf.reduce_sum(
-    tf.square(
-      true_sqrt_box_wh[coord_mask] - pred_sqrt_box_wh[coord_mask]
-    ) * LAMBDA_WH
-  ) / (nb_coord_box + EPSILON) / 2. # divide by two cuz that's the mse
-  
-  # Loss conf
-  loss_conf_obj = tf.reduce_sum(
-    tf.square(
-      true_box_conf[conf_object_mask] - pred_box_conf[conf_object_mask]
-    ) * LAMBDA_OBJ
-  ) / (nb_conf_box + EPSILON) / 2.
-
-  loss_conf_noobj = tf.reduce_sum(
-    tf.square(
-      true_box_conf[conf_noobj_mask] - pred_box_conf[conf_noobj_mask]
-    ) * LAMBDA_NOOBJ
-  ) / (nb_conf_box + EPSILON) / 2.
-  
-  loss_conf = loss_conf_obj + loss_conf_noobj
-
-  # Loss class
-  loss_class = tf.reduce_sum(
-    tf.nn.softmax_cross_entropy_with_logits(
-      true_box_class[class_mask], pred_box_class[class_mask], axis=-1
-    ) * LAMBDA_CLASS
-  ) / nb_class_box
-
-  loss = loss_xy + loss_wh + loss_conf + loss_class
-  return loss, [loss_xy, loss_wh, loss_conf, loss_class]
-
 loop=1
 test_batch_id=0
 verbose=True
@@ -536,235 +451,64 @@ for i in range(loop):
       test_batch_id, confidence_score=0.4, display_label=True, display_cell=False)
 
 
-# %%
-
-show_img_with_bbox(sample_input, logits, id_to_class, 
-      test_batch_id, confidence_score=0.5, display_label=True, display_cell=False)
-
-# %%
-
-y_true, y_pred = sample_output, model(sample_input, training=True)
-mask_shape = tf.shape(y_true)[:-1]
-
-pred_box_xy = y_pred[..., -5:-3]
-pred_box_wh = y_pred[..., -3:-1] # Adjust prediction
-pred_box_conf = y_pred[..., -1]
-pred_box_class = y_pred[..., :-5]
-
-true_box_xy = y_true[..., -5:-3]
-true_box_wh = y_true[..., -3:-1]
-true_box_conf = y_true[..., -1] # Shape (batch, 20, 20)
-true_box_class = y_true[..., :-5]
-
-# The 1_ij of the object (the ground truth of the resonsible box)
-coord_mask = y_true[..., -1] == 1.0 # Shape (batch, 20, 20, 1)
-
-# conf_mask
-conf_object_mask = y_true[..., -1] == 1.0
-
-# conf_mask
-conf_no_object_mask = y_true[..., -1] == 0.0 
-
-# class mask
-class_mask = y_true[..., -1] == 1.0 # Shape (batch, 20, 20)
-
-# Adjust the label confidence by multiplying the labeled confidence with the actual iou after predicted
-ious = dynamic_iou(y_true[..., -5:-1], y_pred[..., -5:-1]) # Shape (batch, 20, 20)
-true_box_conf = true_box_conf * ious # Shape (batch, 20, 20) x (batch, 20, 20) = (batch, 20, 20)
-
-# conf mask
-conf_low_conf_mask = ious < CONFIDENCE_THHRESHOLD
-conf_noobj_mask = tf.logical_and(conf_no_object_mask, conf_low_conf_mask)
-
-# Finalize the loss
-
-# compute the number of position that we are actually backpropagating
-nb_coord_box = tf.reduce_sum(tf.cast(coord_mask, dtype=tf.float32))
-nb_conf_box  = tf.reduce_sum(tf.cast(tf.logical_or(conf_object_mask, conf_noobj_mask), dtype=tf.float32))
-nb_class_box = tf.reduce_sum(tf.cast(class_mask, dtype=tf.float32))
-
-# Loss xy
-loss_xy = tf.reduce_sum(
-  tf.square(
-    true_box_xy[coord_mask] - pred_box_xy[coord_mask]
-  ) * LAMBDA_COORD
-) / (nb_coord_box + EPSILON) / 2. # divide by two cuz that's the mse
-
-# Loss wh
-true_sqrt_box_wh = tf.sign(true_box_wh) * tf.sqrt(tf.abs(true_box_wh) + EPSILON)
-pred_sqrt_box_wh = tf.sign(pred_box_wh) * tf.sqrt(tf.abs(pred_box_wh) + EPSILON)
-loss_wh = tf.reduce_sum(
-  tf.square(
-    true_sqrt_box_wh[coord_mask] - pred_sqrt_box_wh[coord_mask]
-  ) * LAMBDA_WH
-) / (nb_coord_box + EPSILON) / 2. # divide by two cuz that's the mse
-
-# Loss conf
-loss_conf_obj = tf.reduce_sum(
-  tf.square(
-    true_box_conf[conf_object_mask] - pred_box_conf[conf_object_mask]
-  ) * LAMBDA_OBJ
-) / (nb_conf_box + EPSILON) / 2.
-
-loss_conf_noobj = tf.reduce_sum(
-  tf.square(
-    true_box_conf[conf_noobj_mask] - pred_box_conf[conf_noobj_mask]
-  ) * LAMBDA_NOOBJ
-) / (nb_conf_box + EPSILON) / 2.
-
-loss_conf = loss_conf_obj + loss_conf_noobj
-
-# Loss class
-loss_class = tf.reduce_sum(
-  tf.nn.softmax_cross_entropy_with_logits(
-    true_box_class[class_mask], pred_box_class[class_mask], axis=-1
-  ) * LAMBDA_CLASS
-) / nb_class_box
-
-loss = loss_xy + loss_wh + loss_conf + loss_class
+# show_img_with_bbox(sample_input, logits, id_to_class, 
+#       test_batch_id, confidence_score=0.5, display_label=True, display_cell=False)
 
 
-# %%%
-
-# Example COCO:
-import struct
-class WeightReader:
-    def __init__(self, weight_file):
-        with open(weight_file, 'rb') as w_f:
-            major,    = struct.unpack('i', w_f.read(4))
-            minor,    = struct.unpack('i', w_f.read(4))
-            revision, = struct.unpack('i', w_f.read(4))
-
-            if (major*10 + minor) >= 2 and major < 1000 and minor < 1000:
-                w_f.read(8)
-            else:
-                w_f.read(4)
-
-            transpose = (major > 1000) or (minor > 1000)
-            
-            binary = w_f.read()
-
-        self.offset = 0
-        self.all_weights = np.frombuffer(binary, dtype='float32')
+# def do_nms(boxes, nms_thresh):
+#     if len(boxes) > 0:
+#         nb_class = len(boxes[0].classes)
+#     else:
+#         return
         
-    def read_bytes(self, size):
-        self.offset = self.offset + size
-        return self.all_weights[self.offset-size:self.offset]
+#     for c in range(nb_class):
+#         sorted_indices = np.argsort([-box.classes[c] for box in boxes])
 
-    def load_weights(self, model):
-        for i in range(106):
-            try:
-                conv_layer = model.get_layer('conv_' + str(i))
-                print("loading weights of convolution #" + str(i))
+#         for i in range(len(sorted_indices)):
+#             index_i = sorted_indices[i]
 
-                if i not in [81, 93, 105]:
-                    norm_layer = model.get_layer('bnorm_' + str(i))
+#             if boxes[index_i].classes[c] == 0: continue
 
-                    size = np.prod(norm_layer.get_weights()[0].shape)
+#             for j in range(i+1, len(sorted_indices)):
+#                 index_j = sorted_indices[j]
 
-                    beta  = self.read_bytes(size) # bias
-                    gamma = self.read_bytes(size) # scale
-                    mean  = self.read_bytes(size) # mean
-                    var   = self.read_bytes(size) # variance            
-
-                    weights = norm_layer.set_weights([gamma, beta, mean, var])  
-
-                if len(conv_layer.get_weights()) > 1:
-                    bias   = self.read_bytes(np.prod(conv_layer.get_weights()[1].shape))
-                    kernel = self.read_bytes(np.prod(conv_layer.get_weights()[0].shape))
+#                 if bbox_iou(boxes[index_i], boxes[index_j]) >= nms_thresh:
+#                     boxes[index_j].classes[c] = 0
                     
-                    kernel = kernel.reshape(list(reversed(conv_layer.get_weights()[0].shape)))
-                    kernel = kernel.transpose([2,3,1,0])
-                    conv_layer.set_weights([kernel, bias])
-                else:
-                    kernel = self.read_bytes(np.prod(conv_layer.get_weights()[0].shape))
-                    kernel = kernel.reshape(list(reversed(conv_layer.get_weights()[0].shape)))
-                    kernel = kernel.transpose([2,3,1,0])
-                    conv_layer.set_weights([kernel])
-            except ValueError:
-                print("no convolution #" + str(i))     
-    
-    def reset(self):
-        self.offset = 0
-
-net_h, net_w = 416, 416
-obj_thresh, nms_thresh = 0.5, 0.45
-weights_path = "./yolov3.weights"
-anchors = [[116,90,  156,198,  373,326],  [30,61, 62,45,  59,119], [10,13,  16,30,  33,23]]
-
-labels = ["person", "bicycle", "car", "motorbike", "aeroplane", "bus", "train", "truck", \
-              "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", \
-              "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", \
-              "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", \
-              "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", \
-              "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", \
-              "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", \
-              "chair", "sofa", "pottedplant", "bed", "diningtable", "toilet", "tvmonitor", "laptop", "mouse", \
-              "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", \
-              "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"]
-
-# make the yolov3 model to predict 80 classes on COCO
-yolov3 = make_yolov3_model()
-
-# load the weights trained on COCO into the model
-weight_reader = WeightReader(weights_path)
-weight_reader.load_weights(yolov3)
-
-
-def do_nms(boxes, nms_thresh):
-    if len(boxes) > 0:
-        nb_class = len(boxes[0].classes)
-    else:
-        return
+# def draw_boxes(image, boxes, labels, obj_thresh):
+#     for box in boxes:
+#         label_str = ''
+#         label = -1
         
-    for c in range(nb_class):
-        sorted_indices = np.argsort([-box.classes[c] for box in boxes])
-
-        for i in range(len(sorted_indices)):
-            index_i = sorted_indices[i]
-
-            if boxes[index_i].classes[c] == 0: continue
-
-            for j in range(i+1, len(sorted_indices)):
-                index_j = sorted_indices[j]
-
-                if bbox_iou(boxes[index_i], boxes[index_j]) >= nms_thresh:
-                    boxes[index_j].classes[c] = 0
-                    
-def draw_boxes(image, boxes, labels, obj_thresh):
-    for box in boxes:
-        label_str = ''
-        label = -1
-        
-        for i in range(len(labels)):
-            if box.classes[i] > obj_thresh:
-                label_str += labels[i]
-                label = i
-                print(labels[i] + ': ' + str(box.classes[i]*100) + '%')
+#         for i in range(len(labels)):
+#             if box.classes[i] > obj_thresh:
+#                 label_str += labels[i]
+#                 label = i
+#                 print(labels[i] + ': ' + str(box.classes[i]*100) + '%')
                 
-        if label >= 0:
-            cv2.rectangle(image, (box.xmin,box.ymin), (box.xmax,box.ymax), (0,255,0), 3)
-            cv2.putText(image, 
-                        label_str + ' ' + str(box.get_score()), 
-                        (box.xmin, box.ymin - 13), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 
-                        1e-3 * image.shape[0], 
-                        (0,255,0), 2)
+#         if label >= 0:
+#             cv2.rectangle(image, (box.xmin,box.ymin), (box.xmax,box.ymax), (0,255,0), 3)
+#             cv2.putText(image, 
+#                         label_str + ' ' + str(box.get_score()), 
+#                         (box.xmin, box.ymin - 13), 
+#                         cv2.FONT_HERSHEY_SIMPLEX, 
+#                         1e-3 * image.shape[0], 
+#                         (0,255,0), 2)
         
-    return image      
+#     return image      
 
 
-boxes = []
+# boxes = []
 
-for i in range(len(logits)):
-    # decode the output of the network
-    boxes += decode_netout(logits[i][0], anchors[i], obj_thresh, nms_thresh, net_h, net_w)
+# for i in range(len(logits)):
+#     # decode the output of the network
+#     boxes += decode_netout(logits[i][0], anchors[i], obj_thresh, nms_thresh, net_h, net_w)
 
-# correct the sizes of the bounding boxes
-correct_yolo_boxes(boxes, net_h, net_w, net_h, net_w)
+# # correct the sizes of the bounding boxes
+# correct_yolo_boxes(boxes, net_h, net_w, net_h, net_w)
 
-# suppress non-maximal boxes
-do_nms(boxes, nms_thresh)
+# # suppress non-maximal boxes
+# do_nms(boxes, nms_thresh)
 
 
 # %%
@@ -789,6 +533,7 @@ len(logits)
 # Vidualize intermediate layers
 
 layer_list = [l for l in model.layers]
+layer_name_list = [l.name for l in layer_list]
 debugging_model = tf.keras.Model(model.inputs, [l.output for l in layer_list])
 
 print(len(layer_list))
@@ -801,8 +546,8 @@ sample_x = sample["input"]
 sample_y_true = sample["output"]
 
 TEST_BATCH_ID = 0
+# Activations
 y_pred_list = debugging_model(sample_x[TEST_BATCH_ID:TEST_BATCH_ID+1], training=True)
-
 
 show_img_with_bbox(sample_x, 
       y_pred_list[-1], id_to_class, 0, confidence_score=0.5, display_label=True)
@@ -893,6 +638,121 @@ for x, CONVOLUTION_NUMBER in enumerate(CONVOLUTION_NUMBER_LIST):
 
 plt.show()
 
+# %%
+
+# GRADCAM Visualization addweights heatmap to the image
+
+def get_CAM(model, img, actual_label, loss_func, layer_name='block5_conv3'):
+
+  model_grad = tf.keras.Model(model.inputs, 
+                      [model.get_layer(layer_name).output, model.output])
+  
+  with tf.GradientTape() as tape:
+      conv_output_values, predictions = model_grad(img)
+
+      # watch the conv_output_values
+      tape.watch(conv_output_values)
+      
+      # Calculate loss as in the loss func
+      try:
+        loss, _ = loss_func(actual_label, predictions)
+      except:
+        loss = loss_func(actual_label, predictions)
+      print(f"Loss: {loss}")
+  
+  # get the gradient of the loss with respect to the outputs of the last conv layer
+  grads_values = tape.gradient(loss, conv_output_values)
+  grads_values = tf.reduce_mean(grads_values, axis=(0,1,2))
+  
+  conv_output_values = np.squeeze(conv_output_values.numpy())
+  grads_values = grads_values.numpy()
+  
+  # weight the convolution outputs with the computed gradients
+  for i in range(conv_output_values.shape[-1]): 
+      conv_output_values[:,:,i] *= grads_values[i]
+  heatmap = np.mean(conv_output_values, axis=-1)
+  
+  heatmap = np.maximum(heatmap, 0)
+  heatmap /= heatmap.max()
+  
+  del model_grad, conv_output_values, grads_values, loss
+  
+  return heatmap
+
+activations = debugging_model(sample_x[TEST_BATCH_ID:TEST_BATCH_ID+1, ...], training=True)
+
+heatmap = get_CAM(model, 
+  sample_x[TEST_BATCH_ID:TEST_BATCH_ID+1, ...], 
+  sample_y_true[TEST_BATCH_ID:TEST_BATCH_ID+1, ...], 
+  yolo_loss_3, layer_name="conv_60")
+
+heatmap = cv2.resize(heatmap, (example_image_size[0], example_image_size[1]))
+heatmap = heatmap * 255
+heatmap = np.clip(heatmap, 0, 255).astype(np.uint8)
+heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_HOT)
+converted_img = sample_x[TEST_BATCH_ID, ...].numpy()
+super_imposed_image = cv2.addWeighted(converted_img, 0.8, heatmap.astype('float32'), 2e-3, 0.0)
+
+f,ax = plt.subplots(2,2, figsize=(15,8))
+
+ax[0,0].imshow(sample_x[TEST_BATCH_ID, ...])
+# ax[0,0].set_title(f"True label: {sample_label} \n Predicted label: {pred_label}")
+ax[0,0].axis('off')
+
+conv_number = 15
+sample_activation = activations[42][0,:,:,conv_number]
+sample_activation-=tf.reduce_mean(sample_activation).numpy()
+sample_activation/=tf.math.reduce_std(sample_activation).numpy()
+sample_activation *=255
+sample_activation = np.clip(sample_activation, 0, 255).astype(np.uint8)
+ax[0,1].imshow(sample_activation)
+ax[0,1].set_title("Random feature map")
+ax[0,1].axis('off')
+
+ax[1,0].imshow(heatmap)
+ax[1,0].set_title("Class Activation Map")
+ax[1,0].axis('off')
+
+ax[1,1].imshow(super_imposed_image)
+ax[1,1].set_title("Activation map superimposed")
+ax[1,1].axis('off')
+plt.tight_layout()
+plt.show()
+
+# %%%
+
+##### Visualize intermediary #######
+
+def visualize_intermediate_activations(layer_names, activations):
+  assert len(layer_names)==len(activations), "Make sure layers and activation values match"
+  images_per_row=16
+  
+  for layer_name, layer_activation in zip(layer_names, activations):
+    nb_features = layer_activation.shape[-1]
+    size= layer_activation.shape[1]
+
+    nb_cols = nb_features // images_per_row
+    grid = np.zeros((size*nb_cols, size*images_per_row))
+
+    for col in range(nb_cols):
+      for row in range(images_per_row):
+        feature_map = layer_activation[0,:,:,col*images_per_row + row]
+        feature_map -= tf.reduce_mean(feature_map).numpy()
+        feature_map /= tf.math.reduce_std(feature_map).numpy()
+        feature_map *=255
+        feature_map = np.clip(feature_map, 0, 255).astype(np.uint8)
+
+        grid[col*size:(col+1)*size, row*size:(row+1)*size] = feature_map
+
+    scale = 1./size
+    plt.figure(figsize=(scale*grid.shape[1], scale*grid.shape[0]))
+    plt.title(layer_name)
+    plt.grid(False)
+    plt.axis('off')
+    plt.imshow(grid, aspect='auto', cmap='viridis')
+  plt.show()
+
+visualize_intermediate_activations(layer_name_list, y_pred_list)
 
 # %%
 
@@ -912,13 +772,10 @@ history = train(
   weights_path=model_weights_path
 )
 
-# TODO: History integration. DONE!
 # TODO: mAP metrics
 # TODO: Tensorboard integration
-# TODO: TQDM integration. Also, time per training step/epoch
 # TODO: checkpoint (save weights) integration. Including handling keyboard exception.
 # TODO: lr scheduler integration
-
 
 # %%
 
@@ -935,7 +792,6 @@ logits = model(val_batch["input"], training=False)
 val_loss, [lxy, lwh, lconf, lcls] = yolo_loss_2(val_batch["output"], logits)
 
 print(f"Validation loss: {val_loss}, loss xy: {lxy}, loss width height: {lwh}, loss conf: {lconf}, loss class: {lcls}")
-
 
 sample_id = 0
 sample_img = val_batch["input"][sample_id]
@@ -979,23 +835,11 @@ for yth_cell in range(sample_pred.shape[0]):
       boxed_img = draw_boxes(sample_img, [[resized_xmin, resized_ymin, bbox_width, bbox_height]])
       show_img(boxed_img)
 
-# %%
-
-
-# %%5
-
-a = tf.convert_to_tensor([[2], [1]])
-b = tf.convert_to_tensor([[1,2,4], [2,3,4]])
-
-b*a
-
-# %%5
-
-classes
 
 # %%
 
-# Plot
+######## Plot history #########
+
 with open(training_history_path, "rb") as f:
   [epochs_loss, epochs_val_loss] = np.load(f, allow_pickle=True)
 
@@ -1020,184 +864,5 @@ plt.plot(np.arange(1,len(flatten_epochs_loss) + 1), flatten_epochs_loss)
 plt.plot(np.arange(1,len(flatten_epochs_loss) + 1, val_step), flatten_epochs_val_loss)
 plt.show()
 
-# %%%5
-
-epochs_val_loss
 
 # %%
-
-a = np.empty((1,1))
-np.append(a, [[2]], axis=0)
-
-a = a.tolist()
-a
-
-# %%
-
-np.array([])
-
-# %%
-
-sample_data = next(train_batch_iter)
-# %%
-
-sample_img = sample_data["input"]
-sample_label = sample_data["output"]
-sample_id = 1
-
-
-# %%
-show_img(sample_img[sample_id])
-# %%
-
-cell_list = []
-
-confidence_score = 0.5
-for yth_cell in range(sample_label[sample_id].shape[0]):
-  for xth_cell in range(sample_label[sample_id].shape[1]):
-    # Draw all boxes with confidence > 0.5
-    cell_center_x = sample_label[sample_id][yth_cell, xth_cell, n_class + 0] # range [0, 1]
-    cell_center_y = sample_label[sample_id][yth_cell, xth_cell, n_class + 1] # range [0, 1]
-    cell_bbox_width = sample_label[sample_id][yth_cell, xth_cell, n_class + 2] # range [0, 1]
-    cell_bbox_height = sample_label[sample_id][yth_cell, xth_cell, n_class + 3] # range [0, 1]
-    
-    # Draw out!
-    center_x = (cell_center_x + xth_cell) / n_cell_x
-    center_y = (cell_center_y + yth_cell) / n_cell_y
-    bbox_width = cell_bbox_width / n_cell_x
-    bbox_height = cell_bbox_height / n_cell_y
-    
-    resized_xmin = center_x - bbox_width / 2.0
-    resized_xmax = center_x + bbox_width / 2.0
-    resized_ymin = center_y - bbox_height / 2.0
-    resized_ymax = center_y + bbox_height / 2.0
-    confidence = sample_label[sample_id][yth_cell, xth_cell, n_class + 4]
-    pred_classes = sample_label[sample_id][yth_cell, xth_cell, 0:n_class]
-    max_class_id = int(tf.argmax(pred_classes).numpy())
-    if confidence > confidence_score:
-      cell_list.append((yth_cell, xth_cell))
-      print(f"Labeled class: {id_to_class[max_class_id]}")
-      print(f"Confidence score: {confidence}")
-      # Show the img with bounding boxes for the resized img
-      boxed_img = draw_boxes(sample_img[sample_id], [[resized_xmin, resized_ymin, bbox_width, bbox_height]])
-      show_img(boxed_img)
-
-# %%
-
-cell_list
-
-# %%
-
-sample_pred = model(sample_img)
-
-
-# %%
-
-sample_pred_item = sample_pred[sample_id]
-
-# %%
-
-sample_label_item = sample_label[sample_id]
-
-# %%
-
-loss, [lxy, lwh, lconf, lcls] = yolo_loss_2(sample_label, sample_pred)
-
-print(f"loss: {loss}, loss xy: {lxy}, loss width height: {lwh}, loss conf: {lconf}, loss class: {lcls}")
-
-# %%
-
-# %%
-
-
-identity_obj = sample_label[..., -1].numpy() # (batch, 20, 20)
-# Shape (batch, 20, 20, n_classes + 5)
-
-
-# %%
-
-a = tf.square(label_conf * identity_obj)
-
-# %%
-
-sample_a = a[sample_id]
-
-# %%
-A = sample_label[..., -5:-1]
-B = sample_label[..., -5:-1]
-
-x1_A = A[..., 0:1] - (A[..., 2:3] / 2.0)
-y1_A = A[..., 1:2] - (A[..., 3:4] / 2.0)
-x2_A = A[..., 0:1] + (A[..., 2:3] / 2.0)
-y2_A = A[..., 1:2] + (A[..., 3:4] / 2.0)
-
-x1_B = B[..., 0:1] - (B[..., 2:3] / 2.0)
-y1_B = B[..., 1:2] - (B[..., 3:4] / 2.0)
-x2_B = B[..., 0:1] + (B[..., 2:3] / 2.0)
-y2_B = B[..., 1:2] + (B[..., 3:4] / 2.0)
-
-# shape (batch_size, n_cell_y, n_cell_x)
-min_x2 = tf.reduce_min(tf.concat([x2_A, x2_B], axis=-1), axis=-1)
-max_x1 = tf.reduce_max(tf.concat([x1_A, x1_B], axis=-1), axis=-1)
-min_y2 = tf.reduce_min(tf.concat([y2_A, y2_B], axis=-1), axis=-1)
-max_y1 = tf.reduce_max(tf.concat([y1_A, y1_B], axis=-1), axis=-1)
-
-# shape (batch_size, n_cell_y, n_cell_x)
-intersection = tf.math.maximum(0, min_x2 - max_x1) * tf.math.maximum(0, min_y2 - max_y1)
-
-# (batch_size, n_cell_y, n_cell_x)
-union = tf.squeeze((x2_A - x1_A) * (y2_A - y1_A) + (x2_B - x1_B) * (y2_B - y1_B), axis=-1) - intersection
-
-lala = (intersection + EPSILON) / (union + EPSILON)
-
-# %%
-
-ious = dynamic_iou(sample_label[..., -5:-1], sample_label[..., -5:-1]) # Shape (batch, 20,20)
-# ious = ious[..., tf.newaxis] # (batch, 20, 20, 1)
-label_conf = sample_label[..., -1] * lala
-
-
-
-# %%
-
-ious = dynamic_iou(sample_label[..., -5:-1], sample_pred[..., -5:-1]) # Shape (batch, 20,20)
-# ious = ious[..., tf.newaxis] # (batch, 20, 20, 1)
-label_conf = sample_label[..., -1] * ious
-
-# Coordinates x, y loss
-# loss_xy shape (batch, 20, 20)
-loss_xy = LAMBDA_COORD * tf.reduce_sum(tf.square(sample_label[..., -5:-3]*tf.expand_dims(identity_obj,-1) - sample_pred[..., -5:-3]*tf.expand_dims(identity_obj,-1)), axis=-1)
-# loss_wh shape (batch, 20, 20)
-loss_wh = LAMBDA_COORD * tf.reduce_sum(tf.square(tf.sign(sample_label[..., -3:-1])*tf.sqrt(tf.abs(sample_label[..., -3:-1]) + 1e-6)*tf.expand_dims(identity_obj,-1) - tf.sign(sample_pred[..., -3:-1])*tf.sqrt(tf.abs(sample_pred[..., -3:-1]) + 1e-6)*tf.expand_dims(identity_obj,-1)), axis=-1) 
-# loss_class shape (batch, 20, 20)
-loss_class = tf.reduce_sum(tf.square(sample_label[..., :-5] - sample_pred[..., :-5]) * tf.expand_dims(identity_obj, -1), axis=-1)
-
-# loss_conf shape (batch, 20, 20)
-loss_conf = tf.square(label_conf * identity_obj - sample_pred[..., -1] * identity_obj) \
-  + LAMBDA_NOOBJ * tf.square(label_conf * (1 - identity_obj) - sample_pred[..., -1] * (1 - identity_obj))
-
-# element wise addition
-loss = (loss_xy + loss_wh + loss_class + loss_conf)
-
-
-
-# %%%
-
-
-a = tf.random.normal((2, 3, 3, 6)) # (batch, size_x, size_y, vector)
-b = np.zeros((2,3,3,6))
-b[1, 2, 2, 5] = 1
-b[0, 1, 0, 5] = 1
-mask = b[..., -1] > 0.5
-
-# %%
-
-mask
-
-# %%
-
-a[mask]
-
-
-
-

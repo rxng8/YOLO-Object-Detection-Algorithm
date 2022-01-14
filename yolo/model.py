@@ -1,6 +1,6 @@
 from types import new_class
 import tensorflow as tf
-import tensorflow.keras.layers as L
+import tensorflow.keras.layers as layers
 
 from .const import *
 
@@ -212,12 +212,12 @@ class ConvBlock(tf.keras.layers.Layer):
     self.padding=padding
   
   def build(self, input_shape):
-    self.conv = L.Conv2D(self.filters, self.kernel_size, padding=self.padding)
+    self.conv = layers.Conv2D(self.filters, self.kernel_size, padding=self.padding)
 
   def call(self, inputs):
     tensor = self.conv(inputs)
-    tensor = L.BatchNormalization()(tensor)
-    out = L.LeakyReLU(alpha=self.alpha)(tensor)
+    tensor = layers.BatchNormalization()(tensor)
+    out = layers.LeakyReLU(alpha=self.alpha)(tensor)
     return out
 
 class YoloHead(tf.keras.layers.Layer):
@@ -229,7 +229,7 @@ class YoloHead(tf.keras.layers.Layer):
 
   def call(self, inputs):
     tensor_class = inputs[..., :-5]
-    # tensor_class = L.Softmax()(tensor_class) # We dont use this because we
+    # tensor_class = layers.Softmax()(tensor_class) # We dont use this because we
     # directly use tf.nn.softmax_cross_entropy_with_logits
 
     tensor_xy = inputs[..., -5:-3]
@@ -326,20 +326,20 @@ def _conv_block(inp, convs, skip=True):
       skip_connection = x
     count += 1
     
-    if conv['stride'] > 1: x = L.ZeroPadding2D(((1,0),(1,0)))(x) # peculiar padding as darknet prefer left and top
-    x = L.Conv2D(conv['filter'], 
+    if conv['stride'] > 1: x = layers.ZeroPadding2D(((1,0),(1,0)))(x) # peculiar padding as darknet prefer left and top
+    x = layers.Conv2D(conv['filter'], 
                 conv['kernel'], 
                 strides=conv['stride'], 
                 padding='valid' if conv['stride'] > 1 else 'same', # peculiar padding as darknet prefer left and top
                 name='conv_' + str(conv['layer_idx']), 
                 use_bias=False if conv['bnorm'] else True)(x)
-    if conv['bnorm']: x = L.BatchNormalization(epsilon=0.001, name='bnorm_' + str(conv['layer_idx']))(x)
-    if conv['leaky']: x = L.LeakyReLU(alpha=0.1, name='leaky_' + str(conv['layer_idx']))(x)
+    if conv['bnorm']: x = layers.BatchNormalization(epsilon=0.001, name='bnorm_' + str(conv['layer_idx']))(x)
+    if conv['leaky']: x = layers.LeakyReLU(alpha=0.1, name='leaky_' + str(conv['layer_idx']))(x)
 
-  return L.add([skip_connection, x]) if skip else x
+  return layers.add([skip_connection, x]) if skip else x
 
 def make_yolov3_model():
-    input_image = L.Input(shape=(*example_image_size, 3))
+    input_image = layers.Input(shape=(*example_image_size, 3))
 
     # Layer  0 => 4
     x = _conv_block(input_image, [{'filter': 32, 'kernel': 3, 'stride': 1, 'bnorm': True, 'leaky': True, 'layer_idx': 0},
@@ -403,8 +403,8 @@ def make_yolov3_model():
 
     # Layer 83 => 86
     x = _conv_block(x, [{'filter': 256, 'kernel': 1, 'stride': 1, 'bnorm': True, 'leaky': True, 'layer_idx': 84}], skip=False)
-    x = L.UpSampling2D(2)(x)
-    x = L.concatenate([x, skip_61])
+    x = layers.UpSampling2D(2)(x)
+    x = layers.concatenate([x, skip_61])
 
     # Layer 87 => 91
     x = _conv_block(x, [{'filter': 256, 'kernel': 1, 'stride': 1, 'bnorm': True, 'leaky': True, 'layer_idx': 87},
@@ -419,8 +419,8 @@ def make_yolov3_model():
 
     # Layer 95 => 98
     x = _conv_block(x, [{'filter': 128, 'kernel': 1, 'stride': 1, 'bnorm': True, 'leaky': True,   'layer_idx': 96}], skip=False)
-    x = L.UpSampling2D(2)(x)
-    x = L.concatenate([x, skip_36])
+    x = layers.UpSampling2D(2)(x)
+    x = layers.concatenate([x, skip_36])
 
     # Layer 99 => 106
     yolo_106 = _conv_block(x, [{'filter': 128, 'kernel': 1, 'stride': 1, 'bnorm': True,  'leaky': True,  'layer_idx': 99},
@@ -431,8 +431,8 @@ def make_yolov3_model():
                                {'filter': 256, 'kernel': 3, 'stride': 1, 'bnorm': True,  'leaky': True,  'layer_idx': 104},
                                {'filter': 256, 'kernel': 1, 'stride': 1, 'bnorm': True, 'leaky': True, 'layer_idx': 105}], skip=False)
 
-    yolo_106 = L.MaxPool2D(2,2)(yolo_106)
-    yolo_106 = L.Conv2D(86, (3,3), padding="same")(yolo_106)
+    yolo_106 = layers.MaxPool2D(2,2)(yolo_106)
+    yolo_106 = layers.Conv2D(86, (3,3), padding="same")(yolo_106)
 
     out = YoloHead()(yolo_106)
 
