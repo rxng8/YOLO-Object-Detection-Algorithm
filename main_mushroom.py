@@ -518,8 +518,9 @@ for i in range(loop):
 # %%
 
 # Vidualize intermediate layers
-
+CHOSEN_LAYER = [5, 26, 44, 65, 86, 94, 100]
 layer_list = [l for l in model.layers]
+layer_list = [layer_list[i] for i in CHOSEN_LAYER]
 layer_name_list = [l.name for l in layer_list]
 debugging_model = tf.keras.Model(model.inputs, [l.output for l in layer_list])
 
@@ -668,10 +669,14 @@ def get_CAM(model, img, actual_label, loss_func, layer_name='block5_conv3'):
 
 activations = debugging_model(sample_x[TEST_BATCH_ID:TEST_BATCH_ID+1, ...], training=True)
 
+inspecting_layer_index = np.random.randint(0, len(layer_list))
+inspecting_layer_number = layer_list[inspecting_layer_index]
+inspecting_layer_name = layer_name_list[inspecting_layer_index]
+
 heatmap = get_CAM(model, 
   sample_x[TEST_BATCH_ID:TEST_BATCH_ID+1, ...], 
   sample_y_true[TEST_BATCH_ID:TEST_BATCH_ID+1, ...], 
-  yolo_loss_3, layer_name="conv_60")
+  yolo_loss_3, layer_name=inspecting_layer_name)
 
 heatmap = cv2.resize(heatmap, (example_image_size[0], example_image_size[1]))
 heatmap = heatmap * 255
@@ -686,8 +691,8 @@ ax[0,0].imshow(sample_x[TEST_BATCH_ID, ...])
 # ax[0,0].set_title(f"True label: {sample_label} \n Predicted label: {pred_label}")
 ax[0,0].axis('off')
 
-conv_number = 15
-sample_activation = activations[42][0,:,:,conv_number]
+conv_number = 8
+sample_activation = activations[inspecting_layer_index][0,:,:,conv_number]
 sample_activation-=tf.reduce_mean(sample_activation).numpy()
 sample_activation/=tf.math.reduce_std(sample_activation).numpy()
 sample_activation *=255
