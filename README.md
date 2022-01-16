@@ -5,6 +5,8 @@
 2. Dataset:
  * Card dataset: [https://www.kaggle.com/luantm/playing-card](https://cocodataset.org/#download)
  * COCO dataset: [https://cocodataset.org/#download](https://cocodataset.org/#download)
+ * Other dataset can be found [here](https://public.roboflow.com/object-detection):
+   * 
 3. VS Code (in order to run the jupyter notebook with python file: VS Code format)
 
 ## File structure:

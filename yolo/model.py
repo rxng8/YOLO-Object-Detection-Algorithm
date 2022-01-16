@@ -338,7 +338,7 @@ def _conv_block(inp, convs, skip=True):
 
   return layers.add([skip_connection, x]) if skip else x
 
-def make_yolov3_model():
+def make_yolov3_model(n_class: int=81):
     input_image = layers.Input(shape=(*example_image_size, 3))
 
     # Layer  0 => 4
@@ -399,7 +399,7 @@ def make_yolov3_model():
 
     # Layer 80 => 82
     yolo_82 = _conv_block(x, [{'filter': 1024, 'kernel': 3, 'stride': 1, 'bnorm': True,  'leaky': True,  'layer_idx': 80},
-                              {'filter':  86, 'kernel': 1, 'stride': 1, 'bnorm': False, 'leaky': False, 'layer_idx': 81}], skip=False)
+                              {'filter':  n_class+5, 'kernel': 1, 'stride': 1, 'bnorm': False, 'leaky': False, 'layer_idx': 81}], skip=False)
 
     # Layer 83 => 86
     x = _conv_block(x, [{'filter': 256, 'kernel': 1, 'stride': 1, 'bnorm': True, 'leaky': True, 'layer_idx': 84}], skip=False)
@@ -415,7 +415,7 @@ def make_yolov3_model():
 
     # Layer 92 => 94
     yolo_94 = _conv_block(x, [{'filter': 512, 'kernel': 3, 'stride': 1, 'bnorm': True,  'leaky': True,  'layer_idx': 92},
-                              {'filter': 86, 'kernel': 1, 'stride': 1, 'bnorm': False, 'leaky': False, 'layer_idx': 93}], skip=False)
+                              {'filter': n_class+5, 'kernel': 1, 'stride': 1, 'bnorm': False, 'leaky': False, 'layer_idx': 93}], skip=False)
 
     # Layer 95 => 98
     x = _conv_block(x, [{'filter': 128, 'kernel': 1, 'stride': 1, 'bnorm': True, 'leaky': True,   'layer_idx': 96}], skip=False)
@@ -432,7 +432,7 @@ def make_yolov3_model():
                                {'filter': 256, 'kernel': 1, 'stride': 1, 'bnorm': True, 'leaky': True, 'layer_idx': 105}], skip=False)
 
     yolo_106 = layers.MaxPool2D(2,2)(yolo_106)
-    yolo_106 = layers.Conv2D(86, (3,3), padding="same")(yolo_106)
+    yolo_106 = layers.Conv2D(n_class + 5, (3,3), padding="same")(yolo_106)
 
     out = YoloHead()(yolo_106)
 
