@@ -450,7 +450,7 @@ for i in range(loop):
 
   if verbose:
     show_img_with_bbox(sample_input, logits, id_to_class, 
-      test_batch_id, confidence_score=0.85, display_label=True, display_cell=False)
+      test_batch_id, confidence_score=0.9, display_label=True, display_cell=False)
 
 
 # show_img_with_bbox(sample_input, logits, id_to_class, 
